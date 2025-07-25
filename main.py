@@ -1,207 +1,546 @@
-#Square production script. Author: Giulio Peloso
-#TO DO: fix warning "UUID già registrato" shows everytimes, even if the UUID is not present in the log file
-#TO DO: add the check of the "seriale parlante"
-#TO DO: close automatically the cmd window when the python gui is closed
-#TO DO: when all the buttons are pressed go to the next phase without waiting for timeout
-#TO DO: upcase the serial number
+"""
+@main Square production script
+@brief Python project used in production for testing and configuring Square products
 
- # version 1.17 udated 21/02/2025: standyby instead of deep sleep at the end of the testing
+@update 2025-02-21
+@note Standby instead of deep sleep at the end of the testing
 
-import ...
+@author Samuel Fior
+@date 2025-07-25
+@version 2.0
+"""
 
-# Load the TOML file
-with open("settings.toml", "r") as file:
-    settings = toml.load(file)
+# TODO: creare eseguibile .exe / chiudere il file batch insieme alla GUI di Python
+# TODO: sistemare codifica "producers" e "manufacturers"
 
-# File path to the text file
-file_path = 'sap_log.txt'
+#######################################################################################################################
+# IMPORT
+#######################################################################################################################
+import tomli
+import tomli_w
+import time
+import os
+import asyncio
+import threading
+import tkinter as tk
+from tkinter.scrolledtext import ScrolledText
+from threading import Event
+from datetime import datetime
+from bleak import BleakScanner, BleakClient
 
-# Define the address of your BLE device and the UUID of the characteristic
-PRODUCER = settings['manufacturer']['producer']
-CONTRACTOR = settings['manufacturer']['contractor']
-WINDOW_BUTTON_PRESS = settings['manufacturer']['time_to_press_buttons']
-SW_TESTING_VERSION = "0.1"
-BLE_ADDRESS = ""  # Replace with your BLE device's address
+#######################################################################################################################
+# MACRO AND GLOBAL VARIABLES
+#######################################################################################################################
+# Software version
+SW_TESTING_VERSION = "2.0"
 
+# Bluetooth Services
+UUID_EEPROM_WRITE = "347b0012-7635-408b-8918-8ff3949ce592"
+UUID_EEPROM_READ = "347b0013-7635-408b-8918-8ff3949ce592"
+UUID_EEPROM_RESULT = "347b0014-7635-408b-8918-8ff3949ce592"
 SQUARE_BUTTONS_CHAR = "347b0045-7635-408b-8918-8ff3949ce592"
-
-EEPROM_RESULT_NOTIFY = "347b0014-7635-408b-8918-8ff3949ce592" 
-EEPROM_READ = "347b0013-7635-408b-8918-8ff3949ce592" 
-EEPROM_WRITE = "347b0012-7635-408b-8918-8ff3949ce592" 
 SQUARE_CONTROL_POINT = "347b0044-7635-408b-8918-8ff3949ce592"
-EEPROM_READ_REQUEST =  0x0201000700
-EEPROM_ANTID_WRITE_REQUEST =  bytearray(b'\x03\x01\x00\x02\x00')
-EEPROM_HWVER_WRITE_REQUEST =  bytearray(b'\x03\x04\x00\x01\x00')
-EEPROM_LOTNUM_WRITE_REQUEST =  bytearray(b'\x03\x06\x00\x01\x00')
-EEPROM_PRODUCER_WRITE_REQUEST =  bytearray(b'\x03\x07\x00\x01\x00')
 
+# Bluetooth request sequences
+EEPROM_ANTID_WRITE_REQUEST = bytearray(b'\x03\x01\x00\x02\x00')
+EEPROM_HWVER_WRITE_REQUEST = bytearray(b'\x03\x04\x00\x01\x00')
+EEPROM_BATCH_WRITE_REQUEST = bytearray(b'\x03\x06\x00\x01\x00')
+EEPROM_PRODUCER_WRITE_REQUEST = bytearray(b'\x03\x07\x00\x01\x00')
+EEPROM_ANTID_READ_REQUEST = bytearray(b'\x02\x01\x00\x02\x00')
+EEPROM_HWVER_READ_REQUEST = bytearray(b'\x02\x04\x00\x01\x00')
+EEPROM_BATCH_READ_REQUEST = bytearray(b'\x02\x06\x00\x01\x00')
+EEPROM_PRODUCER_READ_REQUEST = bytearray(b'\x02\x07\x00\x01\x00')
 
-# Initialize the flag variable
-flag_report = False
+# External file paths
+toml_file_path = 'settings.toml'
+log_file_path = 'sap_log.txt'
 
+# List of valid colours used in Canvas Lib
+ValidColours = ["grey", "green", "red"]
+# List of buttons to check
+symbols = ["Ʌ", "<", "V", ">", "X", "■", "Bottone SX", "Freno SX", "Cambio1 SX", "Cambio2 SX",
+           "Y", "A", "B", "Z", "●", "▲", "Bottone DX", "Freno DX", "Cambio1 DX", "Cambio2 DX"]
+
+# Producer dictionary
+producers = [
+    {
+        "name": "Default",
+        "internal_code": 0
+    },
+    {
+        "name": "Ceis",
+        "internal_code": 1
+    },
+    {
+        "name": "Pimas",
+        "internal_code": 2
+    },
+    {
+        "name": "Elettrodue",
+        "internal_code": 3
+    }
+]
+# Manufacturer dictionary
+manufacturers = [
+    {
+        "name": "Default",
+        "internal_code": 0
+    },
+    {
+        "name": "Brotto",
+        "internal_code": 1
+    },
+    {
+        "name": "Cosmo",
+        "internal_code": 2
+    },
+    {
+        "name": "Clone",
+        "internal_code": 3
+    },
+    {
+        "name": "Elite",
+        "internal_code": 4
+    }
+]
+# Elite devices dictionary
+elite_devices = [
+    {
+        "name": "ARIA",
+        "sn_code": "AI",
+        "sn_length": 13
+    },
+    {
+        "name": "AVANTI",
+        "sn_code": "AV",
+        "sn_length": 13
+    },
+    {
+        "name": "DIRETO XR",
+        "sn_code": "XR",
+        "sn_length": 13
+    },
+    {
+        "name": "DIRETO XR-T",
+        "sn_code": "XR",
+        "sn_length": 13
+    },
+    {
+        "name": "FUORIPISTA",
+        "sn_code": "FP",
+        "sn_length": 13
+    },
+    {
+        "name": "GATEWAY",
+        "sn_code": "GW",
+        "sn_length": 13
+    },
+    {
+        "name": "JUSTO",
+        "sn_code": "JU",
+        "sn_length": 13
+    },
+    {
+        "name": "JUSTO 2",
+        "sn_code": "J2",
+        "sn_length": 13
+    },
+    {
+        "name": "NERO",
+        "sn_code": "NE",
+        "sn_length": 13
+    },
+    {
+        "name": "RIVO",
+        "sn_code": "RV",
+        "sn_length": 13
+    },
+    {
+        "name": "RIZER",
+        "sn_code": "RZ",
+        "sn_length": 13
+    },
+    {
+        "name": "SQUARE",
+        "sn_code": "SQ",
+        "sn_length": 13
+    },
+    {
+        "name": "STERZO SMART",
+        "sn_code": "ST",
+        "sn_length": 13
+    },
+    {
+        "name": "SUITO",
+        "sn_code": "SU",
+        "sn_length": 13
+    },
+    {
+        "name": "SUITO - T",
+        "sn_code": "SU",
+        "sn_length": 13
+    },
+    {
+        "name": "TUO",
+        "sn_code": "TO",
+        "sn_length": 13
+    },
+    {
+        "name": "TURNO",
+        "sn_code": "TU",
+        "sn_length": 13
+    },
+    {
+        "name": "ZONA",
+        "sn_code": "ZN",
+        "sn_length": 13
+    },
+    {
+        "name": "ZUMO",
+        "sn_code": "ZU",
+        "sn_length": 13
+    }
+]
+
+# Auxiliary variables
 count_buttons_memory = [0] * 22
 button_pressed = [0] * 22
 out_button_pressed = [0] * 20
 iteration = 0
-
+flag_exit = False
 button_event = Event()
-global_flag = 0
+status_ok = True
+first_test = True
 
-def get_month_code():
+# Imported variables from settings.toml file
+PRODUCER = 0
+PROD_BATCH = 0
+TARGET_NAME = ""
+HW_VERSION = 0
+ANT_ID = 0
+RSSI_MIN = 0
+SCAN_TIMEOUT = 0.0
+BLE_TIMEOUT = 0.0
+TESTBUTT_TIME = 0
+MANUFACTURER = ""
+SETT_FILE_VER = 0.0
+FINAL_TEST = ""
+settings = {}
+
+
+#######################################################################################################################
+# FUNCTIONS
+#######################################################################################################################
+
+
+def create_gui() -> None:
+    """
+    @description: Initializes and displays the main graphical user interface for the testing application. It creates
+                  input fields, fixed labels, test indicators, action buttons, and the editor panel.
+    """
+    global root, frame_sx, frame_editor, frame_buttons, saved_label_row, editor, entry, start_button, restart_button
+    global label3, buttons_indicator, report_indicator, canvas, canvas2, FINAL_TEST
+
+    # Variable to count the number of the written editor rows
+    row = 0
+    saved_label_row = 0
+
+    root = create_new_windows(str(TARGET_NAME))
+    # Frame sx
+    frame_sx = create_frame_base(root, 300, 700, 0, 0, "ne")
+    # Frame edit
+    frame_editor = create_frame_base(root, 300, 700, 0, 1, "nsew")
+
+    if FINAL_TEST == "true":
+        # Input
+        entry = create_input(frame_sx, "Seriale parlante", row, 0, row, 1)
+        # Inc row index
+        row += 1
+
+        # Hardware version row
+        create_fixed_output(frame_sx, "Hardware versione", row, 0)
+        create_fixed_output(frame_sx, str(HW_VERSION), row, 1)
+        # Inc row index
+        row += 1
+
+    create_fixed_output(frame_sx, "Pulsanti da controllare ↓", row, 0)
+    # Inc row index
+    row += 1
+
+    # Saved labels row
+    saved_label_row = row
+
+    for z in range(10):
+        create_fixed_output(frame_sx, symbols[z], row, 0)
+        create_fixed_output(frame_sx, symbols[z+10], row, 1)
+        # Inc row index
+        row += 1
+
+    # Indicators
+    canvas = create_report(frame_sx, "Collaudo pulsanti", row, 0, frame_sx, 100, 100, row, 1)
+    buttons_indicator = canvas.create_oval(20, 20, 80, 80, fill="grey")
+    # Inc row index
+    row += 1
+    if FINAL_TEST == "true":
+        canvas2 = create_report(frame_sx, "LOG Report", row, 0, frame_sx, 100, 100, row, 1)
+        report_indicator = canvas2.create_oval(20, 20, 80, 80, fill="grey")
+        # Inc row index
+        row += 1
+
+    # Frame button
+    frame_buttons = create_frame_base(frame_sx, 400, 200, row, 0, "")
+    # Buttons
+    start_button = create_new_button(frame_buttons, "Inizio collaudo", 12, 3, start_operation, 300, 10)
+    restart_button = create_new_button(frame_buttons, "Nuovo collaudo", 12, 3, restart, 300, 100)
+
+    # Editor
+    editor = create_custom_editor(frame_editor, TARGET_NAME, SW_TESTING_VERSION, str(SETT_FILE_VER))
+
+
+def main() -> None:
+    """
+    @description: Entry point of the testing application. It loads configuration data, initializes the GUI, sets up
+                  button labels, and starts the main event loop. If the configuration file is invalid or missing, it
+                  outputs a failure message in the editor.
+    """
+    global labels, frame_sx, saved_label_row, root, status_ok, editor
+
+    # Import data from file and check input values
+    status_ok = import_data_file(toml_file_path)
+
+    if status_ok:
+        # Create a new GUI
+        create_gui()
+
+        # Editing buttons label values
+        labels = []
+        for i in range(20):
+            # Determines the column (0 for first 10, 1 for the rest)
+            label_col = i // 10
+            label_row = saved_label_row + (i % 10)
+            label = tk.Label(frame_sx, text="", font=("Arial", 16, "bold"), width=20)
+            label.grid(row=label_row, column=label_col, padx=1, pady=1)
+            labels.append(label)
+
+        # Initial update of labels with a list of zeros
+        update_labels([0] * 20)
+        set_labels_name()
+
+        root.mainloop()
+    else:
+        editor.insert(tk.END, "❌ Fine - Collaudo NON SUPERATO!\n", "red")
+
+
+def import_data_file(file_path) -> bool:
+    """
+    @description: Loads device and test configuration data from a TOML file and populates global settings. Performs input
+                  validation after extraction.
+
+    @param file_path: Path to the TOML configuration file.
+
+    @return result: True if data have been imported correctly, False otherwise
+    """
+    global PRODUCER, PROD_BATCH, TARGET_NAME, HW_VERSION
+    global ANT_ID, RSSI_MIN, SCAN_TIMEOUT, BLE_TIMEOUT, TESTBUTT_TIME, MANUFACTURER, SETT_FILE_VER, FINAL_TEST
+    global settings, editor
+
+    result = True
+    producer_found = False
+    manufacturer_found = False
+
+    try:
+        # Load the TOML file
+        with open(file_path, "rb") as file:
+            settings = tomli.load(file)
+
+        # Search producer in producers dictionary
+        for producer in producers:
+            if producer["name"] == str(settings['BOARD']['producer']).capitalize():
+                PRODUCER = producer["internal_code"]
+                producer_found = True
+
+        # Search manufacturer in producers dictionary
+        for manufacturer in manufacturers:
+            if manufacturer["name"] == str(settings['DEVICE']['manufacturer']).capitalize():
+                MANUFACTURER = str(settings['DEVICE']['manufacturer']).capitalize()
+                manufacturer_found = True
+
+        if not producer_found:
+            editor.insert(tk.END, f"❌ PRODUCER non inserito nella lista!\n", "red")
+            result = False
+        elif not manufacturer_found:
+            editor.insert(tk.END, f"❌ MANUFACTURER non inserito nella lista!\n", "red")
+            result = False
+        else:
+            PROD_BATCH = settings['BOARD']['batch']
+            TARGET_NAME = str(settings['DEVICE']['type']).upper()
+            HW_VERSION = settings['DEVICE']['hw_version']
+            ANT_ID = settings['VARIABLES']['ant_id_cnt']
+            RSSI_MIN = settings['VARIABLES']['rssi_ths']
+            SCAN_TIMEOUT = settings['VARIABLES']['scan_time']
+            BLE_TIMEOUT = settings['VARIABLES']['ble_time']
+            TESTBUTT_TIME = settings['VARIABLES']['time_to_press_buttons']
+            SETT_FILE_VER = settings['VARIABLES']['file_ver']
+            FINAL_TEST = str(settings['VARIABLES']['final_test']).lower()
+
+            # Check input values
+            if not check_input():
+                result = False
+
+        return result
+
+    except Exception as e:
+        editor.insert(tk.END, f"❌ Errore durante l'import degli input dal file {toml_file_path}: {e}\n\n")
+        return False
+
+
+def check_input() -> bool:
+    """
+    @description: Validates configuration values loaded from the TOML file, including board and device parameters.
+                  Prints specific error messages to the editor and updates global status if any values are invalid.
+    @return result: True if imported data are right, False otherwise
+    """
+    global PRODUCER, PROD_BATCH, HW_VERSION, ANT_ID
+    global editor
+
+    result = True
+
+    try:
+        if not 0 <= PRODUCER <= 254:
+            # Print to text editor
+            editor.insert(tk.END, f"❌ Valore di PRODUCER inserito non valido!\n", "red")
+            result = False
+        if not 0 <= PROD_BATCH <= 254:
+            # Print to text editor
+            editor.insert(tk.END, f"❌ Valore di BATCH inserito non valido!\n", "red")
+            result = False
+        if not 0 <= HW_VERSION <= 254:
+            # Print to text editor
+            editor.insert(tk.END, f"❌ Valore di HW_VERSION inserito non valido!\n", "red")
+            result = False
+        if not 1 <= ANT_ID <= 65534 and FINAL_TEST == "true":
+            # Print to text editor
+            editor.insert(tk.END, f"❌ Valore di ANT_ID inserito non valido!\n", "red")
+            result = False
+
+        return result
+
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore durante il check degli input dal file {toml_file_path}: {e}\n\n", "red")
+        return False
+
+
+def get_month_code() -> list:
+    """
+    @description: Generates a code representing the current month and year, using a custom letter mapping for months and
+                  a 2-digit suffix for the year.
+
+    @return date: A list containing the letter corresponding to the current month and the last two digits of the
+                  current year.
+    """
+    # List of letters corresponding to the months (A = January, B = February, etc.)
+    month_letters = ["A", "B", "C", "D", "E", "0", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
+                     "T", "U", "V", "W", "X", "Y", "Z"]
+
     # Get the current date
     now = datetime.now()
-    
-    # List of letters corresponding to the months (A = January, B = February, etc.)
-    month_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    
-    # Get the current month (1 for January, 2 for February, etc.)
-    current_month = now.month
+
+    # Get the current month
+    current_month = month_letters[now.month - 1]
     
     # Get the last two digits of the year
-    year_suffix = str(now.year)[-2:]
-    
-    # Return the letter corresponding to the current month and year suffix
-    return f"{month_letters[current_month - 1]}{year_suffix}"
-    
-def number_to_2_bytes(num):
-    # Ensure the number is between 0 and 99999
-    if num < 0 or num > 99999:
-        raise ValueError("Number must be between 0 and 99999")
-    
-    # Fit the number into the range of 2 bytes (0 to 65535) using modulo
-    num = num % 65536
-    
+    current_year = str(now.year)[-2:]
+
+    # Return a list with the letter corresponding to the current month and year suffix
+    date = [current_month, current_year]
+    return date
+
+
+def number_to_2_bytes(num) -> bytearray | None:
+    """
+    @description: Converts an integer value into a 2-byte little-endian bytearray. If the input is out of bounds, it
+                  prints an error message to the GUI editor.
+
+    @param num: The integer value to convert (must be between 0 and 65535).
+
+    @return bytearray: A 2-byte bytearray representation of the input number, or None if the value is out of range.
+    """
+    global editor
+
+    # Ensure the number is between 0 and 65535
+    if not (0 <= num <= 65535):
+        # Print to text editor
+        editor.insert(tk.END, "Il valore deve essere compreso tra 0 e 65535\n\n")
+        return
+
     # Convert the number to 2 bytes (little-endian)
-    byte_data = num.to_bytes(2, 'little')
+    byte_array = num.to_bytes(2, byteorder='little')
     
-    return byte_data
-
-# Function to load the counter from the settings.toml file
-def load_counter(config): 
-    try:
-        return int(config['device']['counter'])  # Read and return the stored value
-    except (KeyError, ValueError):
-        return 0  # If the file is invalid or missing the counter, start from 0
-
-# Function to save the counter value to the settings.toml file
-def save_counter(value):
-        
-    with open(file_path, 'r') as file:
-        settings = toml.load(file)
-    
-    # Ensure 'device' section exists
-    if 'device' not in settings:
-        settings['device'] = {}
-    
-    settings['device']['counter'] = value  # Update the counter value
-    
-    # Write back to the settings.toml file
-    with open(file_path, 'w') as file:
-        toml.dump(settings, file)
-
-def write_log(query_fields, filename='sap_log.txt'):
-    # Check if the file exists and has content
-    if not os.path.exists(filename) or os.path.getsize(filename) == 0:
-        # If file is new or empty, write the header
-        with open(filename, 'w') as file:
-            file.write(';'.join(query_fields) + '\n')
+    return byte_array
 
 
-def find_rows_with_value(file_path, column_index, search_value):
+def update_labels(array) -> None:
     """
-    Function to search for rows in a text file where a specific column contains a given value
-    and the last column is "SUCCESS", excluding rows where the last column is "FAIL".
-    
-    Args:
-    - file_path (str): Path to the text file.
-    - column_index (int): The index of the column to search in (0-indexed).
-    - search_value (str): The value to search for in the specified column.
-    
-    Returns:
-    - matching_rows (list): A list of rows where the specified column contains the search value.
-    """
-    matching_rows = []
-    
-    # Open the file and read the data
-    with open(file_path, newline='', encoding='utf-8') as file:
-        reader = csv.reader(file, delimiter=';')  # Using ";" as delimiter
-        for row in reader:
-            # Skip empty or malformed rows
-            if len(row) <= column_index:  
-                continue
-            
-            # Check if the column matches the search value
-            if row[column_index] == search_value:
-                matching_rows.append(row)
-    
-    return matching_rows
+    @description: Updates the color of each button label in the GUI based on its status value. Labels are colored green
+                  if active (value > 0), red if inactive.
 
-def update_labels(array):
-    for i in range(20):
-        if array[i] > 0:
-            labels[i].config(fg="green")
+    @param array: A list of 20 integer values representing button states. Each element controls the foreground color of
+                  its corresponding label.
+    """
+    global labels
+
+    for j in range(20):
+        if array[j] > 0:
+            labels[j].config(fg="green")
         else:
-            labels[i].config(fg="red")
+            labels[j].config(fg="red")
 
-def set_labels_name():
-    symbols = ["Ʌ","<","V",">","X","□","Bottone","Freno","Cambio1","Cambio2","Y","A","B","Z","●","▲","Bottone","Freno","Cambio1","Cambio2"]
-    for i in range(20):            
-        labels[i].config(text=symbols[i], fg="red")
 
-def find_key_index(my_dict, key_to_find):
-    try:
-        # Convert the keys to a list and find the index
-        keys_list = list(my_dict.keys())
-        return keys_list.index(key_to_find)
-    except ValueError:
-        # If the key is not found, return -1 or some indication
-        return -1  
+def set_labels_name() -> None:
+    """
+    @description: Assigns text and color styling to each button label in the GUI. Labels are updated with their
+                  corresponding symbol names and set to red color by default.
+    """
+    global labels
 
-async def scan_and_get_sorted_devices():
-    # Scan for BLE devices
-    scanner = BleakScanner()
-    devices = await scanner.discover()
+    for k in range(20):
+        labels[k].config(text=symbols[k], fg="red")
 
-    # Sort devices by RSSI (signal strength)
-    devices_sorted_by_rssi = sorted(devices, key=lambda d: d.rssi, reverse=True)
 
-    # Return the sorted list of devices
-    return devices_sorted_by_rssi
+def notification_handler(sender, data) -> None:
+    """
+    @description: Handles incoming BLE notifications by decoding 4-bit button states, comparing them with previous
+                  readings, updating global press tracking, and triggering an event if all required buttons are detected
+                  as pressed. Also manages exit/reset behavior for repeated test sessions.
 
-async def get_nearest_devices(type):
-    devices = await scan_and_get_sorted_devices()
-    devices = [device for device in devices if device.name == type]
-    print(devices)
-    return devices
-
-async def read_ble_characteristic(address: str, characteristic_uuid: str) -> bytes:
-    async with BleakClient(address) as client:
-        value = await client.read_gatt_char(characteristic_uuid)
-        return value
-
-# Function to handle indications/notifications
-def notification_handler(sender, data):
+    @param sender: The BLE device or service that sent the notification.
+    @param data: A bytearray containing button status encoded in 4-bit values.
+    """
+    global count_buttons_memory, button_pressed, out_button_pressed, iteration, editor, flag_exit
 
     print(f"Received data from {sender}: {data}")
-    #print(f"Notification from {sender}: {data}")
-    #self.update_label(f"Notification: {data}")
-    global count_buttons_memory  # Declare that you want to use the global variable
-    global button_pressed
-    global out_button_pressed
-    global iteration
-    global global_flag
+    print(f"Notification from {sender}: {data}")
 
     # Initialize an empty list to store the split 4-bit values
     count_buttons = []
 
+    # Reset of variables if an exit request from thread is appeared
+    if flag_exit:
+        flag_exit = False
+        count_buttons_memory = [0] * 22
+        button_pressed = [0] * 22
+        out_button_pressed = [0] * 20
+        iteration = 0
+
     # Loop through each byte in the bytearray
     for byte in data:
         # Extract the higher 4 bits by right-shifting by 4 and store in the list
-        high_nibble = ( (byte) >> 4) & 0x0F
+        high_nibble = ((byte >> 4) & 0x0F)
         count_buttons.append(high_nibble)
             
         # Extract the lower 4 bits by ANDing with 0x0F and store in the list
-        low_nibble = (byte) & 0x0F
+        low_nibble = (byte & 0x0F)
         count_buttons.append(low_nibble)
 
     # Output the result list
@@ -209,430 +548,830 @@ def notification_handler(sender, data):
         result = [abs(a - b) for a, b in zip(count_buttons, count_buttons_memory)]
         button_pressed = [x + y for x, y in zip(button_pressed, result)]
         
-        #format the array
-        for i in range(len(button_pressed)):
-            if button_pressed[i] > 1:
-                button_pressed[i] = 1
-                #self.update_label(f"Notification: {data}")
-        out_button_pressed=button_pressed[2:]
-        print(out_button_pressed)
+        # Format the array
+        for a in range(len(button_pressed)):
+            if button_pressed[a] > 1:
+                button_pressed[a] = 1
+
+        out_button_pressed = button_pressed[2:]
         update_labels(out_button_pressed)
 
         # Check if all buttons are pressed
         if all(element == 1 for element in out_button_pressed):
-            global_flag = 1
-            button_event.set()  # Signal that all buttons are pressed
+            # Flag to request the exit from thread
+            flag_exit = True
+            # Signal that all buttons are pressed
+            button_event.set()
 
-    iteration=iteration+1
+    iteration += 1
     count_buttons_memory = count_buttons.copy()
-    
 
-def notification_eeprom(sender, data):
-    print(f"Received data from {sender}: {data}")
-    print("read/write eeprom")
-    output_label.config(text="Lettura da eeprom") 
+
+def notification_eeprom(sender, data) -> None:
+    """
+    @description: Handles incoming BLE notifications related to EEPROM operations. Prints the raw data received along
+                  with the sender's identifier for debugging purposes.
+
+    @param sender: The BLE device or service that transmitted the EEPROM data.
+    @param data: A bytearray containing the EEPROM payload received.
+    """
+    print(f"Dati ricevuti da {sender}: {data}\n")
+
+
+def check_presence_serial(serial_number, log_file=log_file_path) -> bool:
+    """
+    @description: Checks whether a given serial number is already present in the specified log file. Iterates through
+                  the file entries and compares serial number values to prevent duplicates.
+
+    @param serial_number: The serial number to verify.
+    @param log_file: Path to the log file that contains historical serial numbers.
+
+    @return bool: True if the serial number is not found (i.e., it's new), False if already present.
+    """
+    global editor
+
+    try:
+        # Open LOG file to check all SerialNumber values
+        with open(log_file, 'r', encoding="utf-8") as data_file:
+            rows = data_file.readlines()
+
+        # List of SerialNumber in LOF file
+        sn_column = []
+
+        # Extract the SerialNumber value from each LOG file row
+        for p in rows[1:]:
+            columns = p.strip().split(";")
+            if len(columns) >= 3:
+                # SerialNumber column has index 2
+                sn_column.append(columns[2])
+
+        # Scroll all values in LOG
+        for value in sn_column:
+            if value == serial_number:
+                # Exit to function
+                return False
+
+        # SerialNumber is new value
+        return True
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore nel controllo della presenza del SerialNumber: {e}\n\n", "red")
+
 
 def is_valid_serial(serial: str) -> bool:
     """
-    Check if the serial number is valid.
-    
-    A valid serial number:
-    1. Starts with "SQ".
-    2. Has a total length of 13 characters.
-    
-    Args:
-        serial (str): The serial number to check.
-    
-    Returns:
-        bool: True if the serial number is valid, False otherwise.
+    @description: Validates the format and content of a given serial number string. It checks the prefix, date encoding,
+                  and progressive counter fields. Prints validation feedback to the GUI editor and returns the result.
+
+    @param serial: The serial number string to validate.
+
+    @return result: True if the serial number is valid according to the specified rules, False otherwise.
     """
-    # Check if the string starts with "SQ" and has a length of 13
-    return serial.startswith("SQ") and len(serial) == 13
-    
+    global editor, elite_devices, TARGET_NAME
 
-# Add this function after is_valid_serial
-def check_serial_and_update_button(*args):
-    """
-    Check if the serial number is valid and update the start button state.
-    Called whenever the entry field changes.
-    """
-    if is_valid_serial(entry.get()):
-        start_button.config(state=tk.NORMAL)
-        entry.config(bg="white")
-    else:
-        start_button.config(state=tk.DISABLED)
-        entry.config(bg="pink")  # Visual feedback for invalid input
+    try:
+        result = True
+        dev_found = False
+        serial_num_code = ""
+        serial_num_length = 0
 
-async def async_operation():
-    #global BLE_ADDRESS
-    global out_button_pressed
+        # List for date
+        date = get_month_code()
 
-    user_input = entry.get()
-    #if is_valid_serial(user_input):
-    output_label.config(text="Connessione in corso, attendere")
-    #find Square devices near
-    device_type = "SQUARE"
-    Squares = await get_nearest_devices(device_type)
-    ble_address = 0
-    if Squares:
-        ble_address = Squares[0]
-        #BLE_ADDRESS = ble_address.address
-        print(f"ble address:{ble_address.address}")
-        #print(type(BLE_ADDRESS))
-    else:
-        print("No Square near you")  
-        #self.update_label("No Square near you")    
-        return "Nessun dispositivo trovato"
+        # Extraction of SerialNumber fields
+        mounth = str(serial[2])
+        year = int(serial[3:5])
+        counter = int(serial[5:9])
 
-    output_label.config(text="Dispositivo trovato, attendere!")
+        # Search desired device in elite devices dictionary
+        for device in elite_devices:
+            if device["name"].upper() == TARGET_NAME:
+                # Extract value of desired device
+                serial_num_code = str(device["sn_code"]).upper()
+                serial_num_length = int(device["sn_length"])
+                dev_found = True
 
-    #ble_address_test = "FE:A1:4A:D0:4B:AF"
-    print(f"device found:{ble_address.address}")
-    async with BleakClient(ble_address.address, timeout=30.0) as client:
-        global flag_report
-        ant_id = -1           
-        # Ensure that the client is connected
-        if client.is_connected: 
-            output_label.config(text="Connesso con successo")
-
-            # CHECK BUTTONS
-            await client.start_notify(SQUARE_BUTTONS_CHAR, notification_handler)
-            output_label.config(text="Premere tutti i pulsanti entro il timeout")
-
-            # Reset event and flag before starting
-            button_event.clear()
-            global global_flag
-            global_flag = 0
-
-            # Wait to receive indications (for demonstration, we'll wait for 30 seconds)            
-            try:
-                # Wait for event with timeout
-                await asyncio.get_event_loop().run_in_executor(
-                    None, 
-                    lambda: button_event.wait(timeout=WINDOW_BUTTON_PRESS)
-                )
-            except asyncio.TimeoutError:
-                print("Timeout reached")
-                global_flag = 1
-
-            # Stop notifications/indications
-            await client.stop_notify(SQUARE_BUTTONS_CHAR)
-
-            #if True:
-            if all(element == 1 for element in out_button_pressed):                    
-                set_green_buttons_indicator()
-
-                # Define the query fields
-                query_fields = [
-                    'Date', 'Time', 'self-expl-ID','ANT-SN', 
-                    'FWVersion', 'HWVersion', 'SW_Testing', 'Batch', 
-                    'Producer', 'Contractor', 'BLE-addr'
-                ]
-
-                # Create the query dictionary using query_fields
-                query = {field: None for field in query_fields}
-
-                # Call the function to write to the log file (only if new or empty)
-                log_file_path = 'sap_log.txt'            
-                write_log(query_fields, log_file_path)
-                
-                query['SW_Testing']=SW_TESTING_VERSION
-                
-                query['Contractor'] = CONTRACTOR               
-                query['BLE-addr'] = BLE_ADDRESS                        
-                query['Date']=datetime.now().strftime("%d/%m/%Y")
-                query['Time']=datetime.now().strftime("%H.%M.%S")
-    
-                        
-                query['self-expl-ID']= user_input       
-                
-                sw_version = await client.read_gatt_char("2A28")
-                query['FWVersion']= sw_version.decode('utf-8')
-                
-                # Subscribe to notifications/indications
-                await client.start_notify(EEPROM_RESULT_NOTIFY, notification_eeprom)
-                
-                
-                #write Batch (numero lotto) number from toml
-                await client.write_gatt_char(EEPROM_RESULT_NOTIFY, bytearray([0x03]))
-                lot_id = settings['manufacturer']['batch']
-                lot_id_in_byte = lot_id.to_bytes(1, byteorder='big')
-                await client.write_gatt_char(EEPROM_WRITE, EEPROM_LOTNUM_WRITE_REQUEST + lot_id_in_byte )            
-                query['Batch'] = lot_id
-
-                #write producer number from toml
-                await client.write_gatt_char(EEPROM_RESULT_NOTIFY, bytearray([0x03]))
-                producer_id = PRODUCER
-                producer_id_byte = producer_id.to_bytes(1, byteorder='big')
-                await client.write_gatt_char(EEPROM_WRITE, EEPROM_PRODUCER_WRITE_REQUEST + producer_id_byte )
-                query['Producer'] = producer_id  
-
-
-                #write HW version from toml
-                await client.write_gatt_char(EEPROM_RESULT_NOTIFY, bytearray([0x03]))
-                hwversion_int =settings['device']['hw_version']
-                hwversion_in_byte = hwversion_int.to_bytes(1, byteorder='big')
-                await client.write_gatt_char(EEPROM_WRITE, EEPROM_HWVER_WRITE_REQUEST + hwversion_in_byte )
-
-
-                await client.stop_notify(EEPROM_RESULT_NOTIFY)
-
-
-                #read ant id via BLE read
-                ant_id_from_char = await client.read_gatt_char("2A25")
-                query['ANT-SN'] = int(ant_id_from_char)
-                print(f"ant id : {int(ant_id_from_char)}") 
-
-                #read hw version
-                hwver_from_char = await client.read_gatt_char("2A27")
-                
-                #TO DO: read ant_id from BLE and add check if matches or not
-                if( int(hwver_from_char.decode('utf-8')) == hwversion_int ):
-                    
-                    query['HWVersion'] = hwversion_int
-                    # File path to the text file
-                    file_path = 'sap_log.txt'
-                    search_item_1 = query['self-expl-ID']
-                    search_column_1 = "self-expl-ID"
-                    search_item_2 = BLE_ADDRESS
-                    search_column_2 = "BLE-addr"
-                    search_result_1 = None
-                    search_result_2 = None
-                    try:
-                        if os.path.exists(file_path):
-                            column_index1 = find_key_index(query,search_column_1)                
-                            search_result_1 = find_rows_with_value(file_path, column_index1, search_item_1)                    
-                            column_index2 = find_key_index(query,search_column_2)                
-                            search_result_2 = find_rows_with_value(file_path, column_index2, search_item_2)
-
-                        if( search_result_1 ):
-                            output_label.config(text="ATTENZIONE: Seriale parlante gia' registrato !", fg="red")
-                            time.sleep(2)
-                            output_label.config(text=" ", fg="black")
-
-                        #TO DO: fix warning "UUID già registrato" shows everytimes, even if the UUID is not present in the log file (disabled for the moment)
-                        #if( search_result_2 ):
-                            #output_label.config(text="ATTENZIONE: UUID gia' registrato !", fg="red")
-                            #time.sleep(2)
-                            #output_label.config(text=" ", fg="black")
-                    except:
-                        print("exception in searching value in reading log data")
-
-                    set_green_report_indicator()
-                    
-                    # Open the file in write mode
-                    with open('sap_log.txt', 'a') as file:  # Open the file in append mode
-                        # Write all values in a single line, separated by a space
-                        file.write(';'.join(str(value) for value in query.values()) + '\n')  # Add a newline character to write on a new line
-
-                else:
-                    print("error: inconsistency between eeprom and ble data")
-                    set_red_report_indicator()
-                    output_label.config(text="error: inconsistency between eeprom and ble data", fg="red")
-                    time.sleep(3)
-                    output_label.config(text=" ", fg="black")
-                    
-                
-                
-                
-            else:
-                output_label.config(text="Fallimento: pulsanti non funzionano !", fg="red")
-                time.sleep(3)
-                output_label.config(text=" ", fg="black")
-                print("Fail: buttons not working !")                
-                set_red_report_indicator()
-                set_red_buttons_indicator()
-
-            #Turn off Square                     
-            output_label.config(text="Spegnimento Square...")   
-            print("Turning off square...")               
-            await client.write_gatt_char(SQUARE_CONTROL_POINT, bytearray([0x0A, 0x00]), response=False) # 0x01 shout down, 0x00 sleep
-
-
-            #UPDATE THE COUNTER
-            # Path to the TOML file
-            toml_file_path = 'settings.toml'
-
-            # Load the current TOML settings
-            with open(toml_file_path, 'r') as file:
-                config = toml.load(file)
-
-            # Print the current config (optional)
-            print("Before update:", config)
-
-            
-            # Write the updated settings back to the TOML file
-            with open(toml_file_path, 'w') as file:
-                toml.dump(config, file)
-
-            print("After update:", config)            
-            
-
-            return "Fine"
+        if not dev_found:
+            editor.insert(tk.END, f"⚠️ Dispositivo non trovato\n\n", "red")
+            result = False
         else:
-            return "Connessione BLE fallita"
-  
-    
-    
-            
+            if not serial[:2] == serial_num_code:
+                # Print to text editor
+                editor.insert(tk.END, f"⚠️ Codice dispositivo riportato nel seriale non valido\n\n", "red")
+                result = False
+            if not len(serial) == serial_num_length:
+                # Print to text editor
+                editor.insert(tk.END, f"⚠️ Lunghezza del seriale non valida\n\n", "red")
+                result = False
+            if (not "A" <= mounth <= "L") or (mounth != date[0]):
+                # Print to text editor
+                editor.insert(tk.END, f"⚠️ Mese inserito non valido\n\n", "red")
+                result = False
+            elif (not 0 <= year <= 99) or (str(year) != date[1]):
+                # Print to text editor
+                editor.insert(tk.END, "⚠️ Anno inserito non valido\n\n", "red")
+                result = False
+            elif not 0 <= counter <= 9999:
+                # Print to text editor
+                editor.insert(tk.END, "⚠️ Progressivo inserito non valido\n\n", "red")
+                result = False
 
-# Function to start the async operation
-def start_operation():
-    output_label.config(text="Start")
+        return result
+
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore nel controllo del SerialNumber: {e}\n\n", "red")
+        return False
+
+
+def increase_ant_id(value) -> None:
+    """
+    @description: Validates and increments the ANT ID counter stored in the configuration file. Resets the value to 1
+                  if it reaches the upper limit. Updates the TOML file and prints the result or any error message to
+                  the GUI editor.
+
+    @param value: The current ANT ID counter to validate and increment.
+    """
+    global editor
+
+    try:
+        # Validation
+        if not (1 <= value <= 65534):
+            # Print to text editor
+            editor.insert(tk.END, f"❌ ANT ID caricato dal file {toml_file_path} non valido!!\n\n", "red")
+            return
+
+        # Increase o reset
+        value = 1 if value == 65534 else value + 1
+
+        # Assign new ANT ID value
+        settings["VARIABLES"]["ant_id_cnt"] = value
+
+        # Write new ANT ID value in toml file
+        with open(toml_file_path, "wb") as sett_file:
+            tomli_w.dump(settings, sett_file)
+
+        # Print to text editor
+        editor.insert(tk.END, f"ANT ID aggiornato: {value}\n\n")
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore aggiornamento dell' ANT ID: {e}", "red")
+
+
+def write_log(query_fields, filename=log_file_path) -> None:
+    """
+    @description: Writes header information to a log file. If the file does not exist or is empty, it creates the file
+                  and inserts the formatted header line using semicolon-separated fields.
+
+    @param query_fields: A list of strings representing column names to be written as the header.
+    @param filename: Path to the log file where the header should be written.
+    """
+    # Check if the file exists and has content
+    if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+        # If file is new or empty, write the header
+        with open(filename, 'w') as data_file:
+            data_file.write(';'.join(query_fields) + '\n')
+
+
+def write_report_log(ble_address, serial_number, fw_version, ant_id, result) -> None:
+    """
+    @description: Generates and appends a formatted report entry to the log file, including metadata about the
+                  BLE device, test execution details, and serial identification. The log header is written if missing
+                  or empty.
+
+    @param ble_address: The BLE address of the tested device.
+    @param serial_number: The serial number used for identification.
+    @param fw_version: The firmware version of the device.
+    @param ant_id: The ANT identifier associated with the test unit.
+    @param result: The result of test ("OK" = pass, "ERR" = fail).
+    """
+    global editor
+
+    try:
+        # Create the query dictionary using query_fields
+        query: dict[str, str | int | None] = {}
+
+        # Define the query fields
+        query_fields = ['Date', 'Time', 'Serial_Number', 'ANT_ID', 'FWVersion', 'HWVersion', 'SW_Testing', 'Batch',
+                        'Producer', 'Manufacturer', 'BLE_Addr', 'Result']
+
+        # Call the function to write to the log file (only if new or empty)
+        write_log(query_fields, log_file_path)
+
+        # Prepare the list of data to write in LOG file
+        query['Date'] = datetime.now().strftime("%d/%m/%Y")
+        query['Time'] = datetime.now().strftime("%H.%M.%S")
+        query['Serial_Number'] = serial_number
+        query['ANT_ID'] = ant_id
+        query['FWVersion'] = fw_version
+        query['HWVersion'] = HW_VERSION
+        query['SW_Testing'] = SW_TESTING_VERSION
+        query['Batch'] = PROD_BATCH
+        query['Producer'] = PRODUCER
+        query['Manufacturer'] = MANUFACTURER
+        query['BLE_Addr'] = ble_address
+        query['Result'] = result
+
+        # Open the file in append mode
+        with open(log_file_path, 'a') as log_data_file:
+            # Write all values in a single line, separated by a space
+            log_data_file.write(';'.join(str(value) for value in query.values()) + '\n')
+
+        # Print to text editor
+        editor.insert(tk.END, "Il report di LOG è stato generato\n\n")
+        set_indicator(canvas2, report_indicator, "green")
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore nella scrittura del report LOG: {e}", "red")
+        set_indicator(canvas2, report_indicator, "red")
+
+
+def set_indicator(canv: tk.Canvas, indicator: int, colour: str) -> None:
+    """
+    @description: Updates the fill color of the buttons indicator displayed in the GUI. Only accepted colors defined in
+                  ValidColours are allowed. If an invalid color is passed or an update error occurs, the issue is logged
+                  in the text editor.
+    @param canv:
+    @param indicator:
+    @param colour: Name of the color to apply to the buttons indicator element.
+    """
+    global editor
+
+    if colour not in ValidColours:
+        print(f"Colore non valido: '{colour}'")
+        return
+
+    try:
+        canv.itemconfig(indicator, fill=colour)
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore durante l'impostazione dell'indicatore: {e}\n\n", "red")
+
+
+def start_operation() -> None:
+    """
+    @description: Initiates the button testing workflow and prepares the GUI for execution. Displays a log message,
+                  resets visual indicators, and validates the serial number if required. The actual test process runs
+                  asynchronously in a separate thread.
+    """
+    global editor, start_button, first_test, user_input, status_ok, FINAL_TEST
+
+    # Print to text editor
+    editor.insert(tk.END, "INIZIO COLLAUDO\n\n", "bold")
+
+    # Reset button and indicatore state
     start_button.config(state=tk.DISABLED)
-    set_grey_report_indicator()
-    set_grey_buttons_indicator()
+    restart_button.config(state=tk.ACTIVE)
+    if FINAL_TEST == "true":
+        set_indicator(canvas2, report_indicator, "grey")
+    set_indicator(canvas, buttons_indicator, "grey")
+
+    # Insert and check SerialNumber only if there is the first test
+    if first_test and FINAL_TEST == "true":
+        user_input = insert_serial_number()
+        if check_serial_number(user_input):
+            # Print to text editor
+            editor.insert(tk.END, "✅ Seriale inserito valido\n\n")
+        else:
+            status_ok = False
 
     # Run the async operation in a separate thread to avoid blocking the main thread
-    main_thread = threading.Thread(target=run_async_operation).start()
-    
+    threading.Thread(target=run_async_operation).start()
 
-def run_async_operation():
+
+def restart() -> None:
+    """
+    @description: Resets the GUI and internal variables to prepare for a new button testing session.
+                  Clears input fields, restores label layout, resets indicators, and reinitializes status values.
+    """
+    global editor, entry, user_input, start_button, labels, saved_label_row, status_ok, first_test
+    global out_button_pressed, button_pressed, count_buttons_memory, iteration
+
+    try:
+        # Reset editor
+        editor.delete("1.0", tk.END)
+        # Reset fields
+        if FINAL_TEST == "true":
+            entry.delete(0, tk.END)
+
+        # Reset variables
+        status_ok = True
+        start_button.config(state=tk.ACTIVE)
+        set_indicator(canvas, buttons_indicator, "grey")
+        if FINAL_TEST == "true":
+            set_indicator(canvas2, report_indicator, "grey")
+
+        # Editing buttons label values
+        labels = []
+        for i in range(20):
+            # Determines the column (0 for first 10, 1 for the rest)
+            label_col = i // 10
+            label_row = saved_label_row + (i % 10)
+            label = tk.Label(frame_sx, text="", font=("Arial", 16, "bold"), width=20)
+            label.grid(row=label_row, column=label_col, padx=1, pady=1)
+            labels.append(label)
+        
+        # Initial update of labels with a list of zeros
+        update_labels([0] * 20)
+        set_labels_name()
+
+        # Initial text
+        editor.insert(tk.END, f"SOFTWARE DI COLLAUDO - {TARGET_NAME}\n", "bold_yellow")
+        editor.insert(tk.END, f"SW version: {SW_TESTING_VERSION}\n", "yellow")
+        editor.insert(tk.END, f"File version: {SETT_FILE_VER}\n\n", "yellow")
+
+        # After first button press, reset the flag
+        if first_test:
+            first_test = False
+
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore nel rilancio: {e}\n\n", "rosso")
+
+
+def run_async_operation() -> None:
+    """
+    @description: Initializes and runs a new asyncio event loop to execute the main asynchronous testing operation in a
+                  non-blocking context. This allows BLE communication and testing tasks to operate independently of
+                  the GUI thread.
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(async_operation())
-    output_label.config(text=result)
+    loop.run_until_complete(async_operation())
 
-# Function to restart the output label
-def start_connection():    
-    output_label.config(text="Start !")
 
-def restart():
+async def scan_and_get_sorted_devices(desired_type: str) -> list:
     """
-    Restarts the entire Python program.
+    @description: Scans for nearby BLE devices and filters the results based on a desired device name and RSSI
+                  threshold. Returns a list of matching devices sorted by signal strength, or displays a warning
+                  if none are found.
+
+    @param desired_type: The name of the BLE device type to search for.
+
+    @return sorted_devices: A list of tuples containing matching BLE devices and their advertisement data, sorted by RSSI.
     """
-    python = sys.executable  # Path to the Python interpreter
-    os.execl(python, python, *sys.argv)  # Restart the program with the same arguments
+    global editor
 
-# Function to restart the output label
-def close():    
-    root.destroy()  # Close the current Tkinter window
+    # Scan for BLE devices
+    devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT, return_adv=True)
 
-def set_red_report_indicator():
-    canvas2.itemconfig(report_indicator, fill="red")
+    if not devices:
+        # Print to text editor
+        editor.insert(tk.END, "⚠️Nessun dispositivo BLE trovato\n")
+        return []
 
-def set_green_report_indicator():
-    canvas2.itemconfig(report_indicator, fill="green")
+    try:
+        # Create a new dict where insert only square devices
+        square_devices = {
+            address: (device, adv)
+            for address, (device, adv) in devices.items()
+            if (device.name == desired_type) or (adv.local_name == desired_type) and
+               (adv.rssi is not None and adv.rssi >= RSSI_MIN)
+        }
 
-def set_red_buttons_indicator():
-    canvas.itemconfig(buttons_indicator, fill="red")
+        # Sort devices by RSSI (signal strength)
+        sorted_devices = sorted(square_devices.items(), key=lambda x: x[1][1].rssi, reverse=True)
 
-def set_green_buttons_indicator():
-    canvas.itemconfig(buttons_indicator, fill="green")
+        # Return the sorted list of devices
+        return sorted_devices
 
-def set_grey_report_indicator():
-    canvas2.itemconfig(report_indicator, fill="grey")
-
-def set_grey_buttons_indicator():
-    canvas.itemconfig(buttons_indicator, fill="grey")
-
-
-# Creating the main window
-root = tk.Tk()
-root.title("Square testing")
-root.geometry('1100x650')
-
-# Create a label with bigger font
-label1 = tk.Label(root, text="Messaggio: 🡒", font=("Arial", 12))
-label1.grid(row=0, column=0, padx=1, pady=1)
-
-# Creating the output label
-output_label = tk.Label(root,
-                        text="",
-                        bg="lightblue",
-                        font=("Arial", 14),
-                        padx=15,               
-                        pady=15,                
-                        justify=tk.CENTER,                           
-                        underline=0,           
-                        wraplength=250         
-                        )
-
-# Pack the label into the window
-output_label.grid(row=0, column=1, padx=1, pady=1)  # Place the label in row 0, column 0
-
-# Create a label with bigger font
-label_id_counter = tk.Label(root, text="Seriale parlante 🡒", font=("Arial", 12))
-label_id_counter.grid(row=1, column=0, padx=1, pady=1)  
-
-# Load the initial counter value from the settings.toml file
-initial_value = load_counter(settings) #to ceck if the counter is needed
-# Access data from the TOML file
-print(settings)
-# Create an entry (input text box) with the loaded value
-entry = tk.Entry(root, width=16)
-entry.grid(row=1, column=1, padx=1, pady=1)
-#entry.insert(0, "SQ"+ get_month_code() + str(initial_value).zfill(4))  # Set the initial value in the entry box
-# Set focus on the Entry widget when the application opens
-entry.focus_set()
-
-# Add trace to entry widget to monitor changes
-entry.bind('<KeyRelease>', lambda e: check_serial_and_update_button())
-
-# Create a label with bigger font
-label_hw_version = tk.Label(root, text="HW Version =", font=("Arial", 12))
-label_hw_version.grid(row=2, column=0, padx=1, pady=1)  
-
-hw_version_text = str(settings['device']['hw_version'])
-# Creating the output label
-hw_version_label = tk.Label(root,
-                        text=hw_version_text,
-                        font=("Arial", 11 ),
-                        padx=5,               
-                        pady=10,                
-                        justify=tk.CENTER,    
-                        wraplength=250         
-                        )
-
-# Pack the label into the window
-hw_version_label.grid(row=2, column=1, padx=1, pady=1)  # Place the label in row 0, column 0
-
-# Creating the start button
-start_button = tk.Button(root, text="Start", command=start_operation, bg="lightblue", state=tk.DISABLED)
-start_button.grid(row=3, column=0, padx=1, pady=1)  # Place the label in row 0, column 0
-
-# Create a label with bigger font
-label2 = tk.Label(root, text="Pulsanti 🡒", font=("Arial", 12))
-label2.grid(row=5, column=0, padx=1, pady=1)  
-                        
-# Create a canvas for the indicator
-canvas = tk.Canvas(root, width=100, height=100)
-canvas.grid(row=5, column=1, padx=1, pady=1)  # Place the canvas in row 0, column 1 next to the label
-# Create a circle (indicator) on the canvas
-buttons_indicator = canvas.create_oval(20, 20, 80, 80, fill="grey")
-
-# Create a label with bigger font
-label3 = tk.Label(root, text="Non dimenticare di testare i LED!", font=("Arial", 12))
-label3.grid(row=6, column=0, padx=1, pady=1)  
-
-# Create a canvas for the indicator
-canvas2 = tk.Canvas(root, width=100, height=100)
-canvas2.grid(row=7, column=1, padx=1, pady=1)  # Place the canvas in row 0, column 1 next to the label
-report_indicator  = canvas2.create_oval(20, 20, 80, 80, fill="grey")
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌Errore nel riordino dei devices BLE: {e}\n", "red")
 
 
-# Create a label with bigger font
-label3 = tk.Label(root, text="Report 🡒", font=("Arial", 12))
-label3.grid(row=7, column=0, padx=1, pady=1)  
+def insert_serial_number() -> str:
+    """
+    @description: Retrieves the serial number input from the GUI entry field and returns it as a string. This value is
+                  used to validate and track the current test session.
 
-# Creating the restart button
-restart_button = tk.Button(root, text="Restart", command=restart)
-restart_button.grid(row=9, column=0, padx=1, pady=2)  # Place the label in row 0, column 0
+    @return input_ser_value: The serial number entered by the user.
+    """
+    # Insert SerialNumber
+    input_ser_value = entry.get()
+
+    return input_ser_value.upper()
 
 
+def check_serial_number(input_value) -> bool:
+    """
+    @description: Validates the given serial number by format and duplication. First, it checks if the serial is
+                  structurally correct. Then it verifies whether the serial number is already present in the log file.
+                  If duplicate, a warning is printed to the GUI editor.
 
-# Create labels to display each item status
-labels = []
-for i in range(20):
-    col = 2 + i // 10  # Determines the column (0 for first 10, 1 for the rest)
-    row =   i % 10   # Determines the row (0-9) + 1 to avoid overlap with the button
-    label = tk.Label(root, text="", font=("Arial", 16, "bold"), width=20)
-    label.grid(row=row, column=col, padx=1, pady=1)
-    labels.append(label)
+    @param input_value: The serial number string to validate and verify for uniqueness.
 
-# Initial update of labels with a list of zeros
-update_labels([0] * 20)
-set_labels_name()
+    @return status: True if the serial number is valid and not previously recorded, False otherwise.
+    """
+    status = True
 
-# Running the Tkinter event loop
-root.mainloop()
+    # Check serial number
+    if not is_valid_serial(input_value):
+        status = False
+    else:
+        # Check if SerialNumber has already written in LOG file
+        if not check_presence_serial(input_value, log_file_path):
+            # Print to text editor
+            editor.insert(tk.END, f"ATTENZIONE: Serial Number {input_value} gia' registrato!\n\n", "orange")
+
+    return status
+
+
+async def async_operation() -> None:
+    """
+    @description: Executes the full BLE-based functional test routine asynchronously. Scans for nearby Square devices,
+                  connects to the selected device, verifies hardware interactions, performs EEPROM programming (if
+                  enabled), and handles GUI feedback and reporting accordingly. Manages timeout, validation, and user
+                  prompts while ensuring proper session finalization.
+    """
+    global editor, out_button_pressed, status_ok, user_input, first_test, flag_exit
+    global PROD_BATCH, PRODUCER, FINAL_TEST, HW_VERSION, ANT_ID
+    ble_address = ""
+    name = ""
+
+    # Reset old values if an exit from thread is appeared
+    if flag_exit:
+        out_button_pressed = [0] * 20
+
+    if not first_test:
+        # Import data from settings file and check input values
+        status_ok = import_data_file(toml_file_path)
+        if status_ok:
+            if FINAL_TEST == "true":
+                # Insert and check SerialNumber
+                user_input = insert_serial_number()
+                if check_serial_number(user_input):
+                    # Print to text editor
+                    editor.insert(tk.END, "✅ Seriale inserito valido\n\n")
+                else:
+                    status_ok = False
+
+    if status_ok:
+        # Print to text editor
+        editor.insert(tk.END, "🔍 Scansione dispositivi BLE in corso. Attendere...\n\n")
+
+        # Find Square devices near
+        all_squares_devices = await scan_and_get_sorted_devices(TARGET_NAME)
+        if not all_squares_devices:
+            # Print to text editor
+            editor.insert(tk.END,
+                          f"⚠️ Nessun dispositivo {TARGET_NAME} trovato con RSSI ≥ {RSSI_MIN} dBm.\n", "red")
+            status_ok = False
+        else:
+            # Select SQUARE device nearer
+            ble_address, (target_device, target_adv) = all_squares_devices[0]
+            name = target_device.name or target_adv.local_name or TARGET_NAME
+
+    if status_ok:
+        # Print to text editor
+        editor.insert(tk.END, f"📶 Dispositivo {name} trovato! Add:{ble_address}\n")
+        editor.insert(tk.END, "Attendere connessione col dispositivo...\n\n")
+
+        try:
+            async with BleakClient(ble_address, timeout=BLE_TIMEOUT) as client:
+                # Reset event and flag before starting
+                button_event.clear()
+
+                # Ensure that the client is connected
+                if client.is_connected:
+                    # Check buttons
+                    await client.start_notify(SQUARE_BUTTONS_CHAR, notification_handler)
+                    # Print to text editor
+                    editor.insert(tk.END, "🔗 Connesso! Puoi iniziare il collaudo funzionale\n\n")
+                    time.sleep(1)
+                    editor.insert(tk.END, f"Premere tutti i pulsanti entro {TESTBUTT_TIME}s\n")
+                    time.sleep(0.5)
+                    editor.insert(tk.END, "NON DIMENTICARE DI TESTARE I LED!\n", "bold")
+                    time.sleep(0.5)
+                    editor.insert(tk.END, "NON DIMENTICARE DI TESTARE I FRENI!\n\n", "bold")
+
+                    try:
+                        # Wait for event with timeout
+                        await asyncio.get_event_loop().run_in_executor(None,
+                                                                       lambda: button_event.wait(timeout=TESTBUTT_TIME))
+                    except asyncio.TimeoutError:
+                        # Print to text editor
+                        editor.insert(tk.END, "❌ Timeout scaduto!\n\n", "red")
+                        status_ok = False
+
+                    # Stop notifications/indications
+                    await client.stop_notify(SQUARE_BUTTONS_CHAR)
+
+                    if all(element == 1 for element in out_button_pressed) and status_ok:
+                        # Print to text editor
+                        editor.insert(tk.END, "Tutti i pulsanti sono stati premuti\n\n")
+                        set_indicator(canvas, buttons_indicator, "green")
+
+                        # Notifications/indications enabled
+                        await client.start_notify(UUID_EEPROM_RESULT, notification_eeprom)
+
+                        # Read SW version from BLE
+                        sw_version = await client.read_gatt_char("2A28")
+                        fw_version = sw_version.decode('utf-8')
+                        # Read ANT ID from BLE
+                        ant_id_from_char = await client.read_gatt_char("2A25")
+                        print(f"Valore di ANT ID letto da BLE: {int(ant_id_from_char)}\n")
+
+                        # Manufacturer test
+                        if FINAL_TEST == "true":
+                            # Read production batch loaded from EEPROM
+                            PROD_BATCH = await read_eeprom_parameter(client, EEPROM_BATCH_READ_REQUEST)
+                            # Read producer loaded from EEPROM
+                            PRODUCER = await read_eeprom_parameter(client, EEPROM_PRODUCER_READ_REQUEST)
+
+                            # Write HW version loaded from toml
+                            await write_eeprom_parameter(client, 1, EEPROM_HWVER_WRITE_REQUEST, HW_VERSION)
+
+                            # Write ANT ID loaded from toml
+                            await write_eeprom_parameter(client, 2, EEPROM_ANTID_WRITE_REQUEST, ANT_ID)
+
+                            # Print to text editor
+                            editor.insert(tk.END,
+                                          f"Dati scritti in EEPROM\n", "bold")
+                            editor.insert(tk.END, f"HW Version: {HW_VERSION}\n")
+                            editor.insert(tk.END, f"ANT-ID: {ANT_ID}\n\n")
+
+                            # Print to text editor
+                            editor.insert(tk.END,
+                                          f"Dati letti da EEPROM\n", "bold")
+                            editor.insert(tk.END, f"Produttore: {PRODUCER}\n")
+                            editor.insert(tk.END, f"Lotto: {PROD_BATCH}\n\n")
+                        # Producer test
+                        else:
+                            # Write batch (numero lotto) number loaded from toml
+                            await write_eeprom_parameter(client, 1, EEPROM_BATCH_WRITE_REQUEST, PROD_BATCH)
+                            # Write producer number loaded from toml
+                            await write_eeprom_parameter(client, 1, EEPROM_PRODUCER_WRITE_REQUEST, PRODUCER)
+
+                            # Print to text editor
+                            editor.insert(tk.END, f"Dati scritti in EEPROM\n", "bold")
+                            editor.insert(tk.END, f"Produttore: {PRODUCER}\n")
+                            editor.insert(tk.END, f"Lotto: {PROD_BATCH}\n\n")
+
+                        # Notifications/indications disabled
+                        await client.stop_notify(UUID_EEPROM_RESULT)
+
+                        # Print to text editor
+                        editor.insert(tk.END, "Spegnimento Square...\n\n")
+                        # 0x01 shout down, 0x00 sleep
+                        await client.write_gatt_char(SQUARE_CONTROL_POINT, bytearray([0x0A, 0x00]), response=False)
+                    else:
+                        # Print to text editor
+                        editor.insert(tk.END, "❌ Fallimento: pulsanti non funzionano!\n", "red")
+                        # set_indicator(canvas, buttons_indicator, "red")
+                        status_ok = False
+                else:
+                    # Print to text editor
+                    editor.insert(tk.END, "❌ Connessione BLE persa!\n", "red")
+                    # set_indicator(canvas, buttons_indicator, "red")
+                    status_ok = False
+        except Exception as e:
+            # Print to text editor
+            editor.insert(tk.END, f"❌ Connessione BLE fallita! {e}\n", "red")
+            status_ok = False
+
+    # Exit from thread
+    flag_exit = True
+
+    if status_ok:
+        if FINAL_TEST == "true":
+            # Write report LOG only in final test
+            write_report_log(ble_address, user_input, fw_version, ANT_ID, "OK")
+            # Prepare ANT ID for next device only in last phase of the process
+            increase_ant_id(ANT_ID)
+        # Print to text editor
+        editor.insert(tk.END, "✅ Fine - Collaudo SUPERATO!\n", "green")
+    else:
+        # Print to text editor and signal on report indicator
+        if FINAL_TEST == "true":
+            set_indicator(canvas2, report_indicator, "red")
+        set_indicator(canvas, buttons_indicator, "red")
+        editor.insert(tk.END, "❌ Fine - Collaudo NON SUPERATO!\n", "red")
+        # Close BLE connection
+        await client.disconnect()
+        await asyncio.sleep(1 - 2)
+
+
+def create_new_windows(name: str) -> tk.Tk:
+    """
+    @description: Creates and configures the main application window for the test GUI. Sets title and size, and applies
+                  initial grid layout for left and right sections.
+
+    @param name: The base name used in the window title (e.g., device or project identifier).
+
+    @return window: The newly initialized and configured Tkinter window object.
+    """
+    # Principle window
+    window = tk.Tk()
+    window.title(f"{name} testing")
+    window.geometry('1620x850')
+
+    # Column expansion (SX: fixed, DX: expansion)
+    window.grid_columnconfigure(0, weight=0)
+    window.grid_columnconfigure(1, weight=1)
+    window.grid_rowconfigure(0, weight=1)
+
+    return window
+
+
+def create_frame_base(widget, width: int, height: int, row: int, column: int, sticky: str) -> tk.Frame:
+    """
+    @description: Creates and places a Tkinter frame within a parent window or container. The frame has fixed width and
+                  height, and is placed using grid layout with custom row, column, alignment, and padding configuration.
+
+    @param widget: The parent Tkinter widget in which the frame will be placed.
+    @param width: The width of the frame in pixels.
+    @param height: The height of the frame in pixels.
+    @param row: The row index in the grid where the frame will be placed.
+    @param column: The column index in the grid where the frame will be placed.
+    @param sticky: The sticky alignment value (e.g. "n", "se", "nsew").
+
+    @return frame: The configured frame widget.
+    """
+    frame = tk.Frame(widget, width=width, height=height)
+    frame.grid(row=row, column=column, sticky=sticky, padx=10, pady=10)
+
+    return frame
+
+
+def create_input(frame, testo: str, row1: int, column1: int, row2: int, column2: int) -> tk.Entry:
+    """
+    @description: Creates a labeled input field within the specified Tkinter frame. A label is displayed above the entry
+                  box, both placed using grid layout.
+
+    @param frame: The parent Tkinter frame where the label and entry are placed.
+    @param testo: The text to display as the label above the entry box.
+    @param row1: Grid row index for the label.
+    @param column1: Grid column index for the label.
+    @param row2: Grid row index for the entry field.
+    @param column2: Grid column index for the entry field.
+
+    @return e: The configured entry widget for user input.
+    """
+    # Create a label
+    l_input = tk.Label(frame, text=testo, font=("Arial", 12))
+    l_input.grid(row=row1, column=column1, sticky="ew", padx=1, pady=5)
+    # Create a bow where the value can be insered
+    e = tk.Entry(frame, width=16)
+    e.grid(row=row2, column=column2, sticky="ew", padx=5)
+    e.focus_set()
+
+    return e
+
+
+def create_fixed_output(frame, text: str, row: int, column: int) -> None:
+    """
+    @description: Creates a static output label within a specified Tkinter frame. The label is positioned using grid
+                  layout with padding and alignment.
+
+    @param frame: The parent Tkinter frame in which the label will be placed.
+    @param text: The text content to display in the label.
+    @param row: Grid row index for placing the label.
+    @param column: Grid column index for placing the label.
+    """
+    tk.Label(frame, text=text, font=("Arial", 12)).grid(row=row, column=column, sticky="ew", padx=10, pady=5)
+
+
+def create_report(f1: tk.Frame, t: str, r1: int, c1: int, f2: tk.Frame, w: int, h: int, r2: int, c2: int) -> tk.Canvas:
+    """
+    @description: Creates a labeled section composed of a text label and a canvas element in two separate frames. The
+                  label provides context or a title, while the canvas can be used as a graphical indicator or for
+                  drawing content.
+
+    @param f1: The Tkinter frame where the label will be placed.
+    @param t: The text content for the label.
+    @param r1: Grid row index for placing the label.
+    @param c1: Grid column index for placing the label.
+    @param f2: The Tkinter frame where the canvas will be placed.
+    @param w: Width of the canvas in pixels.
+    @param h: Height of the canvas in pixels.
+    @param r2: Grid row index for placing the canvas.
+    @param c2: Grid column index for placing the canvas.
+
+    @return canv: The created canvas widget, ready for drawing or styling.
+    """
+    lab = tk.Label(f1, text=t, font=("Arial", 12))
+    lab.grid(row=r1, column=c1, padx=1, pady=1)
+    canv = tk.Canvas(f2, width=w, height=h)
+    canv.grid(row=r2, column=c2, padx=1, pady=1)
+
+    return canv
+
+
+def create_new_button(frame, text: str, width: int, height: int, command, x: int, y: int) -> tk.Button:
+    """
+    @description: Creates and places a Tkinter button within a given frame using absolute positioning. The button is
+                  configured with the provided text, dimensions, and command callback.
+
+    @param frame: The parent Tkinter frame or container where the button will be placed.
+    @param text: The text to be displayed on the button.
+    @param width: The width of the button.
+    @param height: The height of the button.
+    @param command: The function to be called when the button is clicked.
+    @param x: The horizontal (x-axis) coordinate for placing the button.
+    @param y: The vertical (y-axis) coordinate for placing the button.
+
+    @return button: The created button widget.
+    """
+    button = tk.Button(frame, text=text, width=width, height=height, command=command)
+    button.place(x=x, y=y)
+
+    return button
+
+
+def create_custom_editor(frame, device_name, sw_test_vers: str, sett_file_vers: str) -> ScrolledText:
+    """
+    @description: Creates and configures a scrollable text editor widget for displaying test logs and feedback. Applies
+                  styling tags for colored output, sets initial header text with software and file version details, and
+                  returns the widget.
+
+    @param frame: The Tkinter frame that will contain the scrollable text editor.
+    @param device_name: The name of the test device to include in the editor header.
+    @param sw_test_vers: The software version string to display.
+    @param sett_file_vers: The settings file version string to display.
+
+    @return ScrolledText: The initialized text editor widget with styling and header text.
+    """
+    edit = ScrolledText(frame, font=("Consolas", 11), bg="black", fg="white", insertbackground="white")
+    edit.pack(fill="both", expand=True)
+
+    # Tags configuration
+    edit.tag_configure("green", foreground="green")
+    edit.tag_configure("red", foreground="red")
+    edit.tag_configure("orange", foreground="orange")
+    edit.tag_configure("yellow", foreground="yellow", font=("Consolas", 10))
+    edit.tag_configure("bold_yellow", foreground="yellow", font=("Consolas", 14, "bold"))
+    edit.tag_configure("bold", font=("Consolas", 12, "bold"))
+
+    # Initial text
+    edit.insert(tk.END, f"SOFTWARE DI COLLAUDO - {device_name}\n", "bold_yellow")
+    edit.insert(tk.END, f"SW version: {sw_test_vers}\n", "yellow")
+    edit.insert(tk.END, f"File version: {sett_file_vers}\n\n", "yellow")
+
+    return edit
+
+
+async def read_eeprom_parameter(client: BleakClient, parameter_req) -> int:
+    """
+    @description: Sends a read request to the BLE device for a specific EEPROM parameter, then reads and decodes
+                  the response, extracting the payload and converting it to an integer using little-endian format.
+
+    @param client: Connected BLE client used to communicate with the target device.
+    @param parameter_req: Byte sequence representing the EEPROM read request.
+
+    @return data: Integer value decoded from the EEPROM payload.
+    """
+    try:
+        # Write on BLE an EEPROM parameter read request
+        await client.write_gatt_char(UUID_EEPROM_WRITE, parameter_req)
+        # Read EEPROM parameter data from BLE
+        value = await client.read_gatt_char(UUID_EEPROM_READ)
+
+        # Extract data length (2 bytes little endian) to 3 up 4 indexes
+        length = int.from_bytes(value[3:5], byteorder='little')
+
+        # Extract payload to index 5
+        data_bytes = value[5:5 + length]
+
+        # Decode data (little endian)
+        data = int.from_bytes(data_bytes, byteorder='little')
+
+        # Return decoded data
+        return data
+    except Exception as e:
+        editor.insert(tk.END, f"❌ Errore nella lettura: {e}\n", "red")
+
+
+async def write_eeprom_parameter(client: BleakClient, byte_length, parameter_req, value) -> None:
+    """
+    @description: Writes a parameter value to the BLE device's EEPROM using the specified request code.
+                  Handles formatting based on the byte length (1 or 2 bytes), applying big or little endian conversion
+                  as required. If an unsupported length is provided, a warning is displayed.
+
+    @param client: Connected BLE client used to communicate with the target device.
+    @param byte_length: Number of bytes to encode the value (supported: 1 or 2).
+    @param parameter_req: Byte sequence representing the EEPROM request prefix.
+    @param value: Integer value to be encoded and written to the EEPROM.
+    """
+    try:
+        # Prepare data to write in right format (little endian, only if data >= 2 bytes)
+        if byte_length == 1:
+            value_byte = value.to_bytes(byte_length, byteorder='big')
+        elif byte_length == 2:
+            value_byte = number_to_2_bytes(value)
+        else:
+            value_byte = 0
+            editor.insert(tk.END, f"Lunghezza del dato non gestita\n", "orange")
+
+        # Write data on EEPROM
+        await client.write_gatt_char(UUID_EEPROM_WRITE, parameter_req + value_byte)
+    except Exception as e:
+        editor.insert(tk.END, f"❌ Errore nella scrittura: {e}\n", "red")
+
+
+#######################################################################################################################
+# PROGRAM
+#######################################################################################################################
+
+# Start main program
+main()
