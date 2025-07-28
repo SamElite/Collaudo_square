@@ -68,11 +68,9 @@ final_test = "true"
    
 ## Usage
 
-1. Launch the application:
-start the launch_testing.bat, or
-   ```batch
-   python square_test_v1_16.py
-   ```
+1. Start the test:
+   - Prepare the right parameter values on settings.toml file
+   - Launch SQUARE.exe
 
 2. Interface Elements:
    - Serial number input field ("Seriale parlante")
