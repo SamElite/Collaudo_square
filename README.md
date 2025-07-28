@@ -46,6 +46,26 @@ file_ver = 2.0
 final_test = "true"
 ```
 
+### Field Descriptions
+
+1. **BOARD**
+   - producer: nome del produttore/collaudatore delle schede, da scrivere in EEPROM
+   - batch: numero del lotto di produzione, da scrivere in EEPROM
+
+2. **DEVICE**
+   - manufacturer: nome del terzista che assembla/collauda il prodotto finale, da scrivere in EEPROM
+   - type: nome del prodotto
+   - hw_versione: numero dell'hw_version, da scrivere in EEPROM
+  
+3. **VARIABLES**
+   - ant_id_cnt: numero incrementale che verrà scritto nel seriale ANT del prossimo dispositivo testato 
+   - rssi_ths: soglia in dB per determinare i dispositivi vicini
+   - scan_time: timeout sul tempo di scansione dei dispositivi BLE
+   - ble_time: timeout sul tempo di connessione con il dispositivo BLE selezionato
+   - time_to_press_buttons: timeout sul tempo del test dei pulsanti
+   - file_ver: versione del file settings.toml
+   - final_test: "true" = collaudo del terzista, "false" = collaudo del produttore
+   
 ## Usage
 
 1. Launch the application:
