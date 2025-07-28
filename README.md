@@ -27,16 +27,23 @@ The application uses a TOML configuration files:
 
 ### settings.toml
 ```toml
-[manufacturer]
-producer = 1
-contractor = "Elite" 
-time_to_press_buttons = 45
-batch = 1
+[BOARD]
+producer = "Default"
+batch = 0
 
-[device]
+[DEVICE]
+manufacturer = "Default"
 type = "Square"
-counter = 1
-hw_version = 1
+hw_version = 0
+
+[VARIABLES]
+ant_id_cnt = 1
+rssi_ths = -55
+scan_time = 5.0
+ble_time = 10.0
+time_to_press_buttons = 30
+file_ver = 2.0
+final_test = "true"
 ```
 
 ## Usage
@@ -56,13 +63,13 @@ start the launch_testing.bat, or
    - Restart button
 
 3. Testing Process:
-   - Enter a valid serial number (a check in the code needs to be added)
+   - Enter a valid serial number
    - Click "Start"
    - The system will:
      1. Scan for nearby Square devices
      2. Connect to the closest device
      3. Begin button testing session
-   - Press all device buttons within the configured timeout (45 seconds)
+   - Press all device buttons within the configured timeout (time expressed in seconds from configuration file)
    - Watch indicators turn green for successful button presses
    - Wait for final report status
 
@@ -72,43 +79,49 @@ The application logs test results in CSV format to `sap_log.txt`. Each test reco
 
 ### Log Format Examples
 ```csv
-08/01/2025;14.59.10;SQA250003181B;271;13;1;0.1;1;1;Elite;
-08/01/2025;15.02.14;SQA2500044708;21;12;1;0.1;1;1;Elite;
+Date;Time;Serial_Number;ANT_ID;FWVersion;HWVersion;SW_Testing;Batch;Producer;Manufacturer;BLE_Addr;Result
+24/07/2025;15.28.58;SQF2500000001;20;14;77;1.2;244;1;Brotto;FE:75:56:03:E3:CC;OK
 ```
 
 ### Field Descriptions
 
 1. **Date** (DD/MM/YYYY)
-   - Example: `08/01/2025` (January 8, 2025)
+   - Example: `24/07/2025` (July 24, 2025)
 
 2. **Time** (HH.MM.SS)
-   - Example: `14.59.10` (14:59:10)
+   - Example: `15.28.58` (15:28:58)
 
-3. **self-expl-ID** - Square device serial number
-   - Example: `SQA250003181B`
+3. **Serial_Number** - Square device serial number
+   - Example: `SQF2500000001`
 
-4. **ANT-SN** - ANT serial number   
-   - Example: `271`, `21`
+4. **ANT_ID** - ANT serial number   
+   - Example: `20`
 
 5. **FWVersion** - Firmware version
    - Format: Integer
-   - Example: `13`, `12`
+   - Example: `14`
 
 6. **HWVersion** - Hardware version
    - Format: Integer
-   - Example: `1`
+   - Example: `77`
 
 7. **SW_Testing** - Testing software version
-   - Current version: `0.1`
+   - Current version: `1.2`
 
 8. **Batch** - Production batch number
-   - Example: `1`
+   - Example: `244`
 
 9. **Producer** - Producer ID number
    - Example: `1`
 
-10. **Contractor** - Manufacturing contractor name
-    - Example: `Elite`
+10. **Manufacturer** - Manufacturing contractor name
+    - Example: `Brotto`
+   
+11. **BLE_Addr** - Bluetooth Low-Energy device address
+    - Example: `FE:75:56:03:E3:CC`
+   
+12. **Result** - Result of test
+    - Example: `OK`
 
 ### File Location
 The log file `sap_log.txt` is automatically created in the application root directory. New test results are appended to the existing file.
@@ -123,20 +136,11 @@ The log file `sap_log.txt` is automatically created in the application root dire
 
 ## Known Issues
 
-1. Testing Process:
-   - Button test continues until timeout even if all buttons are pressed
-   - Command window remains open after GUI closure
-   - "UUID already registered" warning always appears on connection
-
-2. Input Validation:
-   - Serial number validation/check needs to be added
-   - No input sanitization for special characters
-
-3. Performance:
+1. Performance:
    - Slow device discovery, especially in environments with many BLE devices
+   - Slow connection to a BLE device once selected
 
-4. Error Handling:
-   - Limited error messages for BLE connection failures
+2. Error Handling:
    - No retry mechanism for failed connections
 
 ## Troubleshooting
