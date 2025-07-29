@@ -6,7 +6,7 @@
 @note Standby instead of deep sleep at the end of the testing
 
 @author Samuel Fior
-@date 2025-07-25
+@date 2025-07-29
 @version 2.0
 """
 
@@ -880,7 +880,7 @@ def write_report_log(ble_address, serial_number, fw_version, ant_id, result) -> 
 
         # Prepare the list of data to write in LOG file
         query['Date'] = datetime.now().strftime("%d/%m/%Y")
-        query['Time'] = datetime.now().strftime("%H.%M.%S")
+        query['Time'] = datetime.now().strftime("%H:%M:%S")
         query['Serial_Number'] = serial_number
         query['ANT_ID'] = ant_id
         query['FWVersion'] = fw_version
