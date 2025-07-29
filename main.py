@@ -10,7 +10,7 @@
 @version 2.0
 """
 
-# TODO: sistemare codifica "producers" e "manufacturers"
+# TODO: sistemare codifica "producers"
 
 #######################################################################################################################
 # IMPORT
@@ -95,11 +95,11 @@ manufacturers = [
         "internal_code": 2
     },
     {
-        "name": "Clone",
+        "name": "Elite",
         "internal_code": 3
     },
     {
-        "name": "Elite",
+        "name": "Clone",
         "internal_code": 4
     }
 ]
@@ -232,6 +232,56 @@ settings = {}
 # FUNCTIONS
 #######################################################################################################################
 
+def get_crc_16(data: bytes) -> int:
+    """
+    @description: Calculates the CRC-16 checksum for a given byte sequence.
+
+    @param data: The input data to process, provided as a sequence of bytes.
+
+    @return crc: The computed CRC-16 value as an integer.
+    """
+    global editor
+    crc = 0
+
+    try:
+        # Calculate CRC value
+        for i in data:
+            crc ^= i
+            for j in range(8):
+                if crc & 0x0001:
+                    crc = (crc >> 1) ^ 0x6C49
+                else:
+                    crc = crc >> 1
+
+        # Return calculated CRC value
+        return crc
+
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore durante get_crc_16(): {e}\n\n", "red")
+
+
+def crc16_from_str(input_str: str) -> int:
+    """
+    @description: Converts a UTF-8 string into bytes and computes its CRC-16 checksum.
+
+    @param input_str: The input string to be encoded and processed.
+
+    @return get_crc_16(data): The CRC-16 checksum of the encoded byte representation of the string.
+    """
+    global editor
+
+    try:
+        # Convert string to bytes
+        data = input_str.encode('utf-8')
+
+        return get_crc_16(data)
+
+    except Exception as e:
+        # Print to text editor
+        editor.insert(tk.END, f"❌ Errore durante crc16_from_str(): {e}\n\n", "red")
+
+
 def create_gui() -> None:
     """
     @description: Initializes and displays the main graphical user interface for the testing application. It creates
@@ -339,7 +389,7 @@ def main() -> None:
         editor.insert(tk.END, "❌ Fine - Collaudo NON SUPERATO!\n", "red")
 
 
-def _get_application_path():
+def get_application_path():
     """
     @description: Returns the path to the executable or script folder.
     """
@@ -371,7 +421,7 @@ def import_data_file(file_path) -> bool:
 
     try:
         # TOML file complete path
-        config_path = os.path.join(_get_application_path(), toml_file_path)
+        config_path = os.path.join(get_application_path(), toml_file_path)
 
         # Load the TOML file
         with open(config_path, "rb") as file:
@@ -677,7 +727,7 @@ def check_presence_serial(serial_number, log_file=log_file_path) -> bool:
 def is_valid_serial(serial: str) -> bool:
     """
     @description: Validates the format and content of a given serial number string. It checks the prefix, date encoding,
-                  and progressive counter fields. Prints validation feedback to the GUI editor and returns the result.
+                  progressive counter, crc fields. Prints validation feedback to the GUI editor and returns the result.
 
     @param serial: The serial number string to validate.
 
@@ -698,6 +748,9 @@ def is_valid_serial(serial: str) -> bool:
         mounth = str(serial[2])
         year = int(serial[3:5])
         counter = int(serial[5:9])
+        crc = int(serial[9:13], 16)
+        input_data = serial[0:9]
+        calculated_crc = crc16_from_str(input_data)
 
         # Search desired device in elite devices dictionary
         for device in elite_devices:
@@ -721,17 +774,18 @@ def is_valid_serial(serial: str) -> bool:
                 result = False
             if (not "A" <= mounth <= "L") or (mounth != date[0]):
                 # Print to text editor
-                editor.insert(tk.END, f"⚠️ Mese inserito non valido\n\n", "red")
-                result = False
-            elif (not 0 <= year <= 99) or (str(year) != date[1]):
+                editor.insert(tk.END, f"⚠️ ATTENZIONE: Mese inserito non valido\n\n", "orange")
+            if (not 0 <= year <= 99) or (str(year) != date[1]):
                 # Print to text editor
-                editor.insert(tk.END, "⚠️ Anno inserito non valido\n\n", "red")
-                result = False
-            elif not 0 <= counter <= 9999:
+                editor.insert(tk.END, "⚠️ ATTENZIONE: Anno inserito non valido\n\n", "orange")
+            if not 0 <= counter <= 9999:
                 # Print to text editor
                 editor.insert(tk.END, "⚠️ Progressivo inserito non valido\n\n", "red")
                 result = False
-
+            if not calculated_crc == crc:
+                # Print to text editor
+                editor.insert(tk.END, "⚠️ CRC inserito non valido\n\n", "red")
+                result = False
         return result
 
     except Exception as e:
@@ -764,7 +818,7 @@ def increase_ant_id(value) -> None:
         settings["VARIABLES"]["ant_id_cnt"] = value
 
         # TOML file complete path
-        config_path = os.path.join(_get_application_path(), toml_file_path)
+        config_path = os.path.join(get_application_path(), toml_file_path)
 
         # Write new ANT ID value in toml file
         with open(config_path, "wb") as sett_file:
@@ -1227,13 +1281,13 @@ async def async_operation() -> None:
                 # Prepare ANT ID for next device only in last phase of the process
                 increase_ant_id(ANT_ID)
             # Print to text editor
-            editor.insert(tk.END, "✅ Fine - Collaudo SUPERATO!\n", "green")
+            editor.insert(tk.END, "✅ Fine - Collaudo SUPERATO!\n\n", "green")
         else:
             # Print to text editor and signal on report indicator
             if FINAL_TEST == "true":
                 set_indicator(canvas2, report_indicator, "red")
             set_indicator(canvas, buttons_indicator, "red")
-            editor.insert(tk.END, "❌ Fine - Collaudo NON SUPERATO!\n", "red")
+            editor.insert(tk.END, "❌ Fine - Collaudo NON SUPERATO!\n\n", "red")
             # Close BLE connection
             await client.disconnect()
             await asyncio.sleep(1 - 2)
