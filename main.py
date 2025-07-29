@@ -3,11 +3,11 @@
 @brief Python project used in production for testing and configuring Square products
 
 @update 2025-02-21
-@note Standby instead of deep sleep at the end of the testing
+@note Completely fixed the first version of the test program
 
 @author Samuel Fior
 @date 2025-07-29
-@version 2.0
+@version 1.0.0.0
 """
 
 # TODO: sistemare codifica "producers"
@@ -32,7 +32,7 @@ from bleak import BleakScanner, BleakClient
 # MACRO AND GLOBAL VARIABLES
 #######################################################################################################################
 # Software version
-SW_TESTING_VERSION = "2.0"
+SW_TESTING_VERSION = "1.0.0.0"
 
 # Bluetooth Services
 UUID_EEPROM_WRITE = "347b0012-7635-408b-8918-8ff3949ce592"
@@ -880,7 +880,7 @@ def write_report_log(ble_address, serial_number, fw_version, ant_id, result) -> 
 
         # Prepare the list of data to write in LOG file
         query['Date'] = datetime.now().strftime("%d/%m/%Y")
-        query['Time'] = datetime.now().strftime("%H:%M:%S")
+        query['Time'] = datetime.now().strftime("%H:%M")
         query['Serial_Number'] = serial_number
         query['ANT_ID'] = ant_id
         query['FWVersion'] = fw_version
@@ -1311,6 +1311,13 @@ def create_new_windows(name: str) -> tk.Tk:
         window = tk.Tk()
         window.title(f"{name} testing")
         window.geometry('1620x850')
+
+        # Set custom icon
+        icon_path = os.path.join(get_application_path(), "elite_logo.ico")
+        if os.path.exists(icon_path):
+            window.iconbitmap(icon_path)
+        else:
+            raise FileNotFoundError(f"⚠️ Icon file not found: {icon_path}\n\n", "orange")
 
         # Column expansion (SX: fixed, DX: expansion)
         window.grid_columnconfigure(0, weight=0)
