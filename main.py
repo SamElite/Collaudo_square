@@ -10,7 +10,6 @@
 @version 1.0.0.0
 """
 
-# TODO: sistemare codifica "producers"
 
 #######################################################################################################################
 # IMPORT
@@ -76,8 +75,12 @@ producers = [
         "internal_code": 2
     },
     {
-        "name": "Elettrodue",
+        "name": "Dea",
         "internal_code": 3
+    },
+    {
+        "name": "Elettrodue",
+        "internal_code": 4
     }
 ]
 # Manufacturer dictionary
@@ -193,7 +196,7 @@ elite_devices = [
     {
         "name": "ZONA",
         "sn_code": "ZN",
-        "sn_length": 13
+        "sn_length": 7
     },
     {
         "name": "ZUMO",
@@ -514,8 +517,8 @@ def get_month_code() -> list:
                   current year.
     """
     # List of letters corresponding to the months (A = January, B = February, etc.)
-    month_letters = ["A", "B", "C", "D", "E", "0", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
-                     "T", "U", "V", "W", "X", "Y", "Z"]
+    month_letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", 
+                     "U", "V", "W", "X", "Y", "Z"]
 
     try:
         # Get the current date
@@ -774,10 +777,10 @@ def is_valid_serial(serial: str) -> bool:
                 result = False
             if (not "A" <= mounth <= "L") or (mounth != date[0]):
                 # Print to text editor
-                editor.insert(tk.END, f"⚠️ ATTENZIONE: Mese inserito non valido\n\n", "orange")
+                editor.insert(tk.END, f"⚠️ ATTENZIONE: Mese inserito non attuale\n\n", "orange")
             if (not 0 <= year <= 99) or (str(year) != date[1]):
                 # Print to text editor
-                editor.insert(tk.END, "⚠️ ATTENZIONE: Anno inserito non valido\n\n", "orange")
+                editor.insert(tk.END, "⚠️ ATTENZIONE: Anno inserito non attuale\n\n", "orange")
             if not 0 <= counter <= 9999:
                 # Print to text editor
                 editor.insert(tk.END, "⚠️ Progressivo inserito non valido\n\n", "red")
@@ -1107,7 +1110,7 @@ def check_serial_number(input_value) -> bool:
             # Check if SerialNumber has already written in LOG file
             if not check_presence_serial(input_value, log_file_path):
                 # Print to text editor
-                editor.insert(tk.END, f"ATTENZIONE: Serial Number {input_value} gia' registrato!\n\n", "orange")
+                editor.insert(tk.END, f"⚠️ ATTENZIONE: Serial Number {input_value} gia' registrato!\n\n", "orange")
 
         return status
 
