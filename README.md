@@ -70,7 +70,7 @@ final_test = "true"
 
 1. Start the test:
    - Prepare the right parameter values on settings.toml file
-   - Launch SQUARE.exe
+   - Launch Test SQUARE.exe
 
 2. Interface Elements:
    - Serial number input field ("Seriale parlante")
@@ -169,5 +169,4 @@ If you encounter issues:
 2. Check if the Square device is powered on
 3. Verify the serial number format (SQ + 11 characters)
 4. Restart the application if connection fails
-5. Check the Windows Event Viewer for BLE-related errors
 
