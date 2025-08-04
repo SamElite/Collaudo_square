@@ -1,0 +1,19 @@
+title = "Elite testing device config file"
+
+[BOARD]
+producer = "default"
+batch = 0
+
+[DEVICE]
+manufacturer = "brotto"
+type = "square"
+hw_version = 22
+
+[VARIABLES]
+ant_id_cnt = 56
+rssi_ths = -55
+scan_time = 5.0
+ble_time = 10.0
+time_to_press_buttons = 30
+file_ver = 2.0
+final_test = "true"
