@@ -211,9 +211,9 @@ button_pressed = [0] * 22
 out_button_pressed = [0] * 20
 iteration = 0
 flag_exit = False
-button_event = Event()
 status_ok = True
 first_test = True
+button_event = Event()
 
 # Imported variables from settings.toml file
 PRODUCER = 0
@@ -329,21 +329,22 @@ def create_gui() -> None:
             row += 1
 
         # Indicators
-        canvas = create_report(frame_sx, "Collaudo pulsanti", row, 0, frame_sx, 100, 100, row, 1)
-        buttons_indicator = canvas.create_oval(20, 20, 80, 80, fill="grey")
+        canvas = create_report(frame_sx, "Collaudo pulsanti", row, 0, frame_sx, 70, 70, row, 1)
+        buttons_indicator = canvas.create_oval(13, 13, 63, 63, fill="grey")
         # Inc row index
         row += 1
         if FINAL_TEST == "true":
-            canvas2 = create_report(frame_sx, "LOG Report", row, 0, frame_sx, 100, 100, row, 1)
-            report_indicator = canvas2.create_oval(20, 20, 80, 80, fill="grey")
+            canvas2 = create_report(frame_sx, "LOG Report", row, 0, frame_sx, 70, 70, row, 1)
+            report_indicator = canvas2.create_oval(13, 13, 63, 63, fill="grey")
             # Inc row index
             row += 1
 
-        # Frame button
-        frame_buttons = create_frame_base(frame_sx, 400, 200, row, 0, "")
+        # Frame buttons
+        frame_sx_button = create_frame_base(frame_sx, 120, 50, row, 0, "")
+        frame_dx_button = create_frame_base(frame_sx, 120, 50, row, 1, "")
         # Buttons
-        start_button = create_new_button(frame_buttons, "Inizio collaudo", 12, 3, start_operation, 300, 10)
-        restart_button = create_new_button(frame_buttons, "Nuovo collaudo", 12, 3, restart, 300, 100)
+        start_button = create_new_button(frame_sx_button, "Inizio collaudo", 12, 2, start_operation, 10, 0)
+        restart_button = create_new_button(frame_dx_button, "Nuovo collaudo", 12, 2, restart, 10, 0)
 
         # Editor
         editor = create_custom_editor(frame_editor, TARGET_NAME, SW_TESTING_VERSION, str(SETT_FILE_VER))
@@ -1332,7 +1333,7 @@ def create_new_windows(name: str) -> tk.Tk:
         # Principle window
         window = tk.Tk()
         window.title(f"{name} testing")
-        window.geometry('1620x850')
+        window.geometry('1280x720')
 
         # Set custom icon
         icon_path = os.path.join(get_application_path(), "elite.ico")
@@ -1394,7 +1395,7 @@ def create_input(frame, testo: str, row1: int, column1: int, row2: int, column2:
     """
     try:
         # Create a label
-        l_input = tk.Label(frame, text=testo, font=("Arial", 12))
+        l_input = tk.Label(frame, text=testo, font=("Arial", 11))
         l_input.grid(row=row1, column=column1, sticky="ew", padx=1, pady=5)
         # Create a bow where the value can be insered
         e = tk.Entry(frame, width=16)
@@ -1419,7 +1420,7 @@ def create_fixed_output(frame, text: str, row: int, column: int) -> None:
     @param column: Grid column index for placing the label.
     """
     try:
-        tk.Label(frame, text=text, font=("Arial", 12)).grid(row=row, column=column, sticky="ew", padx=10, pady=5)
+        tk.Label(frame, text=text, font=("Arial", 11)).grid(row=row, column=column, sticky="ew", padx=10, pady=5)
 
     except Exception as e:
         # Print to text editor
@@ -1445,7 +1446,7 @@ def create_report(f1: tk.Frame, t: str, r1: int, c1: int, f2: tk.Frame, w: int, 
     @return canv: The created canvas widget, ready for drawing or styling.
     """
     try:
-        lab = tk.Label(f1, text=t, font=("Arial", 12))
+        lab = tk.Label(f1, text=t, font=("Arial", 11))
         lab.grid(row=r1, column=c1, padx=1, pady=1)
         canv = tk.Canvas(f2, width=w, height=h)
         canv.grid(row=r2, column=c2, padx=1, pady=1)
@@ -1497,16 +1498,16 @@ def create_custom_editor(frame, device_name, sw_test_vers: str, sett_file_vers: 
     @return ScrolledText: The initialized text editor widget with styling and header text.
     """
     try:
-        edit = ScrolledText(frame, font=("Consolas", 11), bg="black", fg="white", insertbackground="white")
+        edit = ScrolledText(frame, font=("Consolas", 10), bg="black", fg="white", insertbackground="white")
         edit.pack(fill="both", expand=True)
 
         # Tags configuration
         edit.tag_configure("green", foreground="green")
         edit.tag_configure("red", foreground="red")
         edit.tag_configure("orange", foreground="orange")
-        edit.tag_configure("yellow", foreground="yellow", font=("Consolas", 10))
-        edit.tag_configure("bold_yellow", foreground="yellow", font=("Consolas", 14, "bold"))
-        edit.tag_configure("bold", font=("Consolas", 12, "bold"))
+        edit.tag_configure("yellow", foreground="yellow", font=("Consolas", 8))
+        edit.tag_configure("bold_yellow", foreground="yellow", font=("Consolas", 12, "bold"))
+        edit.tag_configure("bold", font=("Consolas", 10, "bold"))
 
         # Initial text
         edit.insert(tk.END, f"SOFTWARE DI COLLAUDO - {device_name}\n", "bold_yellow")
