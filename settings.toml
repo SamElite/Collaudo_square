@@ -1,16 +1,16 @@
 title = "Elite testing device config file"
 
 [BOARD]
-producer = "default"
-batch = 0
+producer = "ceis"
+batch = 44
 
 [DEVICE]
-manufacturer = "brotto"
+manufacturer = "default"
 type = "square"
-hw_version = 22
+hw_version = 1
 
 [VARIABLES]
-ant_id_cnt = 56
+ant_id_cnt = 70
 rssi_ths = -55
 scan_time = 5.0
 ble_time = 10.0

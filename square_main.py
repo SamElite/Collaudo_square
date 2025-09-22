@@ -31,7 +31,7 @@ from bleak import BleakScanner, BleakClient
 # MACRO AND GLOBAL VARIABLES
 #######################################################################################################################
 # Software version
-SW_TESTING_VERSION = "1.0.0.0"
+SW_TESTING_VERSION = "1.0.0.1"
 
 # Bluetooth Services
 UUID_EEPROM_WRITE = "347b0012-7635-408b-8918-8ff3949ce592"
@@ -213,6 +213,7 @@ iteration = 0
 flag_exit = False
 status_ok = True
 first_test = True
+all_buttons_pressed = False
 button_event = Event()
 
 # Imported variables from settings.toml file
@@ -360,7 +361,7 @@ def main() -> None:
                   button labels, and starts the main event loop. If the configuration file is invalid or missing, it
                   outputs a failure message in the editor.
     """
-    global labels, frame_sx, saved_label_row, root, status_ok, editor
+    global labels, frame_sx, saved_label_row, root, status_ok, editor, FINAL_TEST
 
     try:
         # Import data from file and check input values
@@ -615,13 +616,16 @@ def notification_handler(sender, data) -> None:
     @param sender: The BLE device or service that sent the notification.
     @param data: A bytearray containing button status encoded in 4-bit values.
     """
-    global count_buttons_memory, button_pressed, out_button_pressed, iteration, editor, flag_exit
+    global count_buttons_memory, button_pressed, out_button_pressed, iteration, editor, flag_exit, all_buttons_pressed
+    global FINAL_TEST
 
     print(f"Received data from {sender}: {data}")
     print(f"Notification from {sender}: {data}")
 
     # Initialize an empty list to store the split 4-bit values
     count_buttons = []
+    # Excluded buttons list indexes for producer test
+    excluded_indexes = {8, 9, 18, 19}
 
     try:
         # Reset of variables if an exit request from thread is appeared
@@ -652,15 +656,26 @@ def notification_handler(sender, data) -> None:
                 if button_pressed[a] > 1:
                     button_pressed[a] = 1
 
-            out_button_pressed = button_pressed[2:]
-            update_labels(out_button_pressed)
+            # Update buttons data
+            if not all_buttons_pressed:
+                out_button_pressed = button_pressed[2:]
+                update_labels(out_button_pressed)
 
             # Check if all buttons are pressed
-            if all(element == 1 for element in out_button_pressed):
-                # Flag to request the exit from thread
-                flag_exit = True
-                # Signal that all buttons are pressed
-                button_event.set()
+            if FINAL_TEST == "true":
+                if all(element == 1 for element in out_button_pressed):
+                    all_buttons_pressed = True
+                    # Flag to request the exit from thread
+                    flag_exit = True
+                    # Signal that all buttons are pressed
+                    button_event.set()
+            else:
+                if all(out_button_pressed[i] == 1 for i in range(len(out_button_pressed)) if i not in excluded_indexes):
+                    all_buttons_pressed = True
+                    # Flag to request the exit from thread
+                    flag_exit = True
+                    # Signal that all buttons are pressed
+                    button_event.set()
 
         iteration += 1
         count_buttons_memory = count_buttons.copy()
@@ -972,7 +987,7 @@ def restart() -> None:
     @description: Resets the GUI and internal variables to prepare for a new button testing session.
                   Clears input fields, restores label layout, resets indicators, and reinitializes status values.
     """
-    global editor, entry, user_input, start_button, labels, saved_label_row, status_ok, first_test
+    global editor, entry, user_input, start_button, labels, saved_label_row, status_ok, first_test, all_buttons_pressed
     global out_button_pressed, button_pressed, count_buttons_memory, iteration
 
     try:
@@ -998,7 +1013,7 @@ def restart() -> None:
             label = tk.Label(frame_sx, text="", font=("Arial", 16, "bold"), width=20)
             label.grid(row=label_row, column=label_col, padx=1, pady=1)
             labels.append(label)
-        
+
         # Initial update of labels with a list of zeros
         update_labels([0] * 20)
         set_labels_name()
@@ -1011,6 +1026,8 @@ def restart() -> None:
         # After first button press, reset the flag
         if first_test:
             first_test = False
+
+        all_buttons_pressed = False
 
     except Exception as e:
         # Print to text editor
@@ -1128,16 +1145,12 @@ async def async_operation() -> None:
                   enabled), and handles GUI feedback and reporting accordingly. Manages timeout, validation, and user
                   prompts while ensuring proper session finalization.
     """
-    global editor, out_button_pressed, status_ok, user_input, first_test, flag_exit
+    global editor, out_button_pressed, status_ok, user_input, first_test, flag_exit, all_buttons_pressed
     global PROD_BATCH, PRODUCER, FINAL_TEST, HW_VERSION, ANT_ID
     ble_address = ""
     name = ""
 
     try:
-        # Reset old values if an exit from thread is appeared
-        if flag_exit:
-            out_button_pressed = [0] * 20
-
         if not first_test:
             # Import data from settings file and check input values
             status_ok = import_data_file(toml_file_path)
@@ -1199,12 +1212,12 @@ async def async_operation() -> None:
                             editor.insert(tk.END, "❌ Timeout scaduto!\n\n", "red")
                             status_ok = False
 
-                        # Stop notifications/indications
-                        await client.stop_notify(SQUARE_BUTTONS_CHAR)
+                        if all_buttons_pressed and status_ok:
+                            # Stop notifications/indications
+                            await client.stop_notify(SQUARE_BUTTONS_CHAR)
 
-                        if all(element == 1 for element in out_button_pressed) and status_ok:
                             # Print to text editor
-                            editor.insert(tk.END, "Tutti i pulsanti sono stati premuti\n\n")
+                            editor.insert(tk.END, "Tutti i pulsanti sono stati premuti, attendere...\n\n")
                             set_indicator(canvas, buttons_indicator, "green")
 
                             # Notifications/indications enabled
@@ -1280,14 +1293,13 @@ async def async_operation() -> None:
                             # 0x01 shout down, 0x00 sleep
                             await client.write_gatt_char(SQUARE_CONTROL_POINT, bytearray([0x0A, 0x00]), response=False)
                         else:
+                            print(f"exit:{flag_exit} - status:{status_ok} - buttons:{out_button_pressed}")
                             # Print to text editor
                             editor.insert(tk.END, "❌ Fallimento: pulsanti non funzionano!\n", "red")
-                            # set_indicator(canvas, buttons_indicator, "red")
                             status_ok = False
                     else:
                         # Print to text editor
                         editor.insert(tk.END, "❌ Connessione BLE persa!\n", "red")
-                        # set_indicator(canvas, buttons_indicator, "red")
                         status_ok = False
             except Exception as e:
                 # Print to text editor
