@@ -1240,7 +1240,7 @@ async def async_operation() -> None:
                                 await write_eeprom_parameter(client, 1, EEPROM_HWVER_WRITE_REQUEST, HW_VERSION)
                                 # Write ANT ID loaded from toml
                                 await write_eeprom_parameter(client, 2, EEPROM_ANTID_WRITE_REQUEST, ANT_ID)
-                                time.sleep(1)
+                                time.sleep(0.5)
                                 # Read written HW_VERSION from EEPROM
                                 tmp_hw = await read_eeprom_parameter(client, EEPROM_HWVER_READ_REQUEST)
                                 # Read written ANT_ID from EEPROM
@@ -1268,7 +1268,7 @@ async def async_operation() -> None:
                                 await write_eeprom_parameter(client, 1, EEPROM_BATCH_WRITE_REQUEST, PROD_BATCH)
                                 # Write producer number loaded from toml
                                 await write_eeprom_parameter(client, 1, EEPROM_PRODUCER_WRITE_REQUEST, PRODUCER)
-                                time.sleep(1)
+                                time.sleep(0.5)
                                 # Read written HW_VERSION from EEPROM
                                 tmp_bat = await read_eeprom_parameter(client, EEPROM_BATCH_READ_REQUEST)
                                 # Read written ANT_ID from EEPROM
