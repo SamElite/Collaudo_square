@@ -31,7 +31,7 @@ from bleak import BleakScanner, BleakClient
 # MACRO AND GLOBAL VARIABLES
 #######################################################################################################################
 # Software version
-SW_TESTING_VERSION = "1.0.0.1"
+SW_TESTING_VERSION = "1.0.0.2"
 
 # Bluetooth Services
 UUID_EEPROM_WRITE = "347b0012-7635-408b-8918-8ff3949ce592"
@@ -206,14 +206,23 @@ elite_devices = [
 ]
 
 # Auxiliary variables
-count_buttons_memory = [0] * 22
-button_pressed = [0] * 22
-out_button_pressed = [0] * 20
+N_BUTTONS = 20
+FRAME_LEN = 11
+DATA_BYTES = 10
+button_pressed = [0] * N_BUTTONS
+out_button_pressed = [0] * N_BUTTONS
+count_buttons_memory = [0] * N_BUTTONS
+cum_counts = [0] * N_BUTTONS
+baseline_cum = [0] * N_BUTTONS
 iteration = 0
+NIBBLE_ORDER_HIGH_FIRST = True
+STRICT_BASELINE_CHECK = False
 flag_exit = False
 status_ok = True
 first_test = True
-all_buttons_pressed = False
+first_enter = True
+first_data = None
+last_nibbles = None
 button_event = Event()
 
 # Imported variables from settings.toml file
@@ -607,82 +616,193 @@ def set_labels_name() -> None:
         editor.insert(tk.END, f"❌ Errore durante set_labels_name(): {e}\n\n", "red")
 
 
+def _extract_nibbles_from_payload(data: bytes, high_first: bool = True) -> list[int]:
+    """
+    @description: Extracts 20 4-bit values (nibbles) from the BLE payload.
+                  The incoming BLE frame is expected to contain:
+                    - 1 header byte  (data[0])
+                    - 10 data bytes  (data[1]..data[10])
+                  Each data byte contains two 4-bit counters (high nibble and low nibble) corresponding to individual
+                  button edge counters. This function splits each of the 10 bytes into two nibbles and returns the first
+                  N_BUTTONS (typically 20) nibble counters in the correct order.
+
+    @param data: Raw BLE bytearray (11 bytes expected). Byte 0 is the header and is ignored. Bytes 1..10 contain the
+                 encoded button counter.
+    @param high_first: If True, each byte is split as [high_nibble, low_nibble]. If False, each byte is split
+                       as [low_nibble, high_nibble]. This allows compatibility with devices that send nibbles in
+                       reversed order.
+
+    @return list[int]: A list of exactly N_BUTTONS (20) integers in the range 0–15, each representing the 4‑bit counter
+                       for a specific button channel.
+    """
+    if len(data) < FRAME_LEN:
+        raise ValueError(f"Frame BLE troppo corto: {len(data)}B. Attesi {FRAME_LEN}B (1 header + 10 dati).")
+
+    nibbles = []
+    # Extract payload bytes (index 1..10)
+    payload = data[1:1 + DATA_BYTES]
+    for b in payload:
+        hi = (b >> 4) & 0x0F
+        lo = b & 0x0F
+        # Append in the desired order (high-first or low-first)
+        if high_first:
+            nibbles.extend([hi, lo])
+        else:
+            nibbles.extend([lo, hi])
+
+    # Ensure the list contains exactly the expected number of nibbles
+    return nibbles[:N_BUTTONS]
+
+
 def notification_handler(sender, data) -> None:
     """
-    @description: Handles incoming BLE notifications by decoding 4-bit button states, comparing them with previous
-                  readings, updating global press tracking, and triggering an event if all required buttons are detected
-                  as pressed. Also manages exit/reset behavior for repeated test sessions.
+    @description: Handles incoming BLE notifications by decoding 4‑bit button counters, validating the initial payload
+                  (parity rules depending on FINAL_TEST), computing incremental button presses using modulo‑16 counters,
+                  updating UI output, and triggering the end‑of‑test event when all required buttons have been detected
+                  as pressed.
+                  It also manages a full reset when requested by external threads (flag_exit), and establishes a
+                  baseline on the first received frame.
 
-    @param sender: The BLE device or service that sent the notification.
-    @param data: A bytearray containing button status encoded in 4-bit values.
+    @param sender: BLE device or characteristic that generated the notification.
+    @param data: Raw BLE bytearray containing:
+                 - 1 header byte       (data[0])
+                 - 10 payload bytes    (data[1..10])
+                 Each payload byte encodes two 4‑bit button counters.
     """
-    global count_buttons_memory, button_pressed, out_button_pressed, iteration, editor, flag_exit, all_buttons_pressed
-    global FINAL_TEST
-
-    print(f"Received data from {sender}: {data}")
-    print(f"Notification from {sender}: {data}")
-
-    # Initialize an empty list to store the split 4-bit values
-    count_buttons = []
-    # Excluded buttons list indexes for producer test
-    excluded_indexes = {8, 9, 18, 19}
+    global button_pressed, out_button_pressed, count_buttons_memory, last_nibbles, cum_counts, baseline_cum, editor
+    global iteration, flag_exit, first_enter, first_data, FINAL_TEST
 
     try:
-        # Reset of variables if an exit request from thread is appeared
+        print(f"Received from {sender}: {data}")
+
+        # Reset requested externally (e.g. by another thread)
         if flag_exit:
             flag_exit = False
-            count_buttons_memory = [0] * 22
-            button_pressed = [0] * 22
-            out_button_pressed = [0] * 20
             iteration = 0
+            first_enter = True
+            first_data = None
 
-        # Loop through each byte in the bytearray
-        for byte in data:
-            # Extract the higher 4 bits by right-shifting by 4 and store in the list
-            high_nibble = ((byte >> 4) & 0x0F)
-            count_buttons.append(high_nibble)
+            button_pressed = [0] * N_BUTTONS
+            out_button_pressed = [0] * N_BUTTONS
+            count_buttons_memory = [0] * N_BUTTONS
 
-            # Extract the lower 4 bits by ANDing with 0x0F and store in the list
-            low_nibble = (byte & 0x0F)
-            count_buttons.append(low_nibble)
+            last_nibbles = None
+            cum_counts = [0] * N_BUTTONS
+            baseline_cum = [0] * N_BUTTONS
 
-        # Output the result list
-        if iteration > 0:
-            result = [abs(a - b) for a, b in zip(count_buttons, count_buttons_memory)]
-            button_pressed = [x + y for x, y in zip(button_pressed, result)]
+        # FIRST FRAME → baseline + parity validation on payload bytes
+        if first_enter:
+            first_enter = False
+            first_data = bytes(data)
 
-            # Format the array
-            for a in range(len(button_pressed)):
-                if button_pressed[a] > 1:
-                    button_pressed[a] = 1
+            # Validate frame lengt
+            if len(data) < FRAME_LEN:
+                first_enter = True
+                print(f"Frame iniziale troppo corto ({len(data)}B). Atteso {FRAME_LEN}B.")
+                return
 
-            # Update buttons data
-            if not all_buttons_pressed:
-                out_button_pressed = button_pressed[2:]
-                update_labels(out_button_pressed)
+            # Extract original payload bytes (excluding header)
+            payload_bytes = list(data[1:11])
 
-            # Check if all buttons are pressed
-            if FINAL_TEST == "true":
-                if all(element == 1 for element in out_button_pressed):
-                    all_buttons_pressed = True
-                    # Flag to request the exit from thread
+            # PARITY CHECK BASED ON FINAL_TEST MODE
+            if FINAL_TEST is True:
+
+                # All bytes must be even
+                odd = [i for i, v in enumerate(payload_bytes) if (v % 2) == 1]
+                if odd:
+                    editor.insert(tk.END, f"❌ Errore: Tasto {odd} era già premuto\n", "red")
                     flag_exit = True
-                    # Signal that all buttons are pressed
                     button_event.set()
+                    return
+
             else:
-                if all(out_button_pressed[i] == 1 for i in range(len(out_button_pressed)) if i not in excluded_indexes):
-                    all_buttons_pressed = True
-                    # Flag to request the exit from thread
+                # FINAL_TEST == False: only two bytes must be odd
+                #   2nd byte from the right → index 8
+                #   7th byte from the right → index 3
+                required_odd_positions = [8, 3]
+
+                wrong = []
+
+                for idx, val in enumerate(payload_bytes):
+                    must_be_odd = (idx in required_odd_positions)
+                    is_odd = (val % 2 == 1)
+
+                    if must_be_odd and not is_odd:
+                        wrong.append(idx)
+                    if not must_be_odd and is_odd:
+                        wrong.append(idx)
+
+                if wrong:
+                    editor.insert(tk.END, f"❌ Errore: Tasto {wrong} era già premuto\n", "red")
                     flag_exit = True
-                    # Signal that all buttons are pressed
                     button_event.set()
+                    return
+
+            # Decode nibble counters and initialize baseline
+            current_nibbles = _extract_nibbles_from_payload(data, high_first=NIBBLE_ORDER_HIGH_FIRST)
+            last_nibbles = current_nibbles.copy()
+            count_buttons_memory = current_nibbles.copy()
+            cum_counts = [0] * N_BUTTONS
+            baseline_cum = [0] * N_BUTTONS
+
+            # Initial UI update (all buttons unpressed
+            try:
+                update_labels([0] * N_BUTTONS)
+            except:
+                pass
+            # End of first‑frame handling
+            return
+
+        # FOLLOWING FRAMES → normal press‑detection logic
+        if len(data) < FRAME_LEN:
+            print(f"Frame troppo corto ({len(data)}B): ignorato.")
+            return
+
+        current_nibbles = _extract_nibbles_from_payload(data, high_first=NIBBLE_ORDER_HIGH_FIRST)
+
+        # Safety recovery if baseline was never set
+        if last_nibbles is None:
+            last_nibbles = current_nibbles.copy()
+            count_buttons_memory = current_nibbles.copy()
+            return
+
+        # Accumulate modulo‑16 increments and detect presses (delta ≥ 2
+        for i in range(N_BUTTONS):
+            # Handles wrap-around 0xF→0x
+            inc = (current_nibbles[i] - last_nibbles[i]) & 0x0F
+            cum_counts[i] += inc
+
+            if (cum_counts[i] - baseline_cum[i]) >= 2:
+                button_pressed[i] = 1
+
+        out_button_pressed = button_pressed.copy()
+        # Update stored nibble snapshot
+        last_nibbles = current_nibbles.copy()
+        count_buttons_memory = current_nibbles.copy()
+
+        # Update GUI labels
+        try:
+            update_labels(out_button_pressed)
+        except:
+            pass
+
+        # End test when all buttons have been pressed
+        if all(out_button_pressed):
+            flag_exit = True
+            button_event.set()
 
         iteration += 1
-        count_buttons_memory = count_buttons.copy()
+
+        # Debug
+        print(f"Nibbles: {current_nibbles}")
+        print(f"Cumulativi: {cum_counts}")
+        print(f"Stato pulsanti: {out_button_pressed}\n")
 
     except Exception as e:
-        # Print to text editor
-        editor.insert(tk.END, f"❌ Errore durante notification_handler(): {e}\n\n", "red")
+        try:
+            editor.insert(tk.END, f"❌ Errore in notification_handler(): {e}\n\n", "red")
+        except:
+            print(f"❌ Errore in notification_handler(): {e}")
 
 
 def notification_eeprom(sender, data) -> None:
@@ -987,8 +1107,8 @@ def restart() -> None:
     @description: Resets the GUI and internal variables to prepare for a new button testing session.
                   Clears input fields, restores label layout, resets indicators, and reinitializes status values.
     """
-    global editor, entry, user_input, start_button, labels, saved_label_row, status_ok, first_test, all_buttons_pressed
-    global out_button_pressed, button_pressed, count_buttons_memory, iteration
+    global editor, entry, user_input, start_button, labels, saved_label_row, status_ok, first_test, first_enter
+    global out_button_pressed, button_pressed, count_buttons_memory, iteration, first_data
 
     try:
         # Reset editor
@@ -1027,7 +1147,8 @@ def restart() -> None:
         if first_test:
             first_test = False
 
-        all_buttons_pressed = False
+        first_enter = True
+        first_data = 0
 
     except Exception as e:
         # Print to text editor
@@ -1145,12 +1266,16 @@ async def async_operation() -> None:
                   enabled), and handles GUI feedback and reporting accordingly. Manages timeout, validation, and user
                   prompts while ensuring proper session finalization.
     """
-    global editor, out_button_pressed, status_ok, user_input, first_test, flag_exit, all_buttons_pressed
+    global editor, out_button_pressed, status_ok, user_input, first_test, flag_exit
     global PROD_BATCH, PRODUCER, FINAL_TEST, HW_VERSION, ANT_ID
     ble_address = ""
     name = ""
 
     try:
+        # Reset old values if an exit from thread is appeared
+        if flag_exit:
+            out_button_pressed = [0] * 20
+
         if not first_test:
             # Import data from settings file and check input values
             status_ok = import_data_file(toml_file_path)
@@ -1212,10 +1337,10 @@ async def async_operation() -> None:
                             editor.insert(tk.END, "❌ Timeout scaduto!\n\n", "red")
                             status_ok = False
 
-                        if all_buttons_pressed and status_ok:
-                            # Stop notifications/indications
-                            await client.stop_notify(SQUARE_BUTTONS_CHAR)
+                        # Stop notifications/indications
+                        await client.stop_notify(SQUARE_BUTTONS_CHAR)
 
+                        if all(element == 1 for element in out_button_pressed) and status_ok:
                             # Print to text editor
                             editor.insert(tk.END, "Tutti i pulsanti sono stati premuti, attendere...\n\n")
                             set_indicator(canvas, buttons_indicator, "green")
