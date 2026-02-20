@@ -217,6 +217,7 @@ baseline_cum = [0] * N_BUTTONS
 iteration = 0
 NIBBLE_ORDER_HIGH_FIRST = True
 STRICT_BASELINE_CHECK = False
+error_reported = False
 flag_exit = False
 status_ok = True
 first_test = True
@@ -636,7 +637,7 @@ def _extract_nibbles_from_payload(data: bytes, high_first: bool = True) -> list[
                        for a specific button channel.
     """
     if len(data) < FRAME_LEN:
-        raise ValueError(f"Frame BLE troppo corto: {len(data)}B. Attesi {FRAME_LEN}B (1 header + 10 dati).")
+        raise ValueError(f"BLE frame too short: {len(data)}B. Expected {FRAME_LEN}B.")
 
     nibbles = []
     # Extract payload bytes (index 1..10)
@@ -670,139 +671,109 @@ def notification_handler(sender, data) -> None:
                  Each payload byte encodes two 4‑bit button counters.
     """
     global button_pressed, out_button_pressed, count_buttons_memory, last_nibbles, cum_counts, baseline_cum, editor
-    global iteration, flag_exit, first_enter, first_data, FINAL_TEST
+    global iteration, flag_exit, first_enter, first_data, error_reported, FINAL_TEST
 
     try:
         print(f"Received from {sender}: {data}")
 
-        # Reset requested externally (e.g. by another thread)
+        # If error was already shown, ignore all future frames
+        if error_reported:
+            return
+
+        # Reset requested externally
         if flag_exit:
             flag_exit = False
-            iteration = 0
             first_enter = True
             first_data = None
-
+            error_reported = False
+            last_nibbles = None
+            iteration = 0
             button_pressed = [0] * N_BUTTONS
             out_button_pressed = [0] * N_BUTTONS
             count_buttons_memory = [0] * N_BUTTONS
-
-            last_nibbles = None
             cum_counts = [0] * N_BUTTONS
             baseline_cum = [0] * N_BUTTONS
+            # Avoid processing this frame
+            return
 
-        # FIRST FRAME → baseline + parity validation on payload bytes
+        # First frame: check parity rules
         if first_enter:
             first_enter = False
             first_data = bytes(data)
-
-            # Validate frame lengt
             if len(data) < FRAME_LEN:
                 first_enter = True
-                print(f"Frame iniziale troppo corto ({len(data)}B). Atteso {FRAME_LEN}B.")
                 return
 
-            # Extract original payload bytes (excluding header)
-            payload_bytes = list(data[1:11])
+            current_nibbles = _extract_nibbles_from_payload(data, high_first=NIBBLE_ORDER_HIGH_FIRST)
 
-            # PARITY CHECK BASED ON FINAL_TEST MODE
+            # FINAL_TEST is TRUE: aLL nibble must be even
             if FINAL_TEST is True:
-
-                # All bytes must be even
-                odd = [i for i, v in enumerate(payload_bytes) if (v % 2) == 1]
+                odd = [i for i, v in enumerate(current_nibbles) if v % 2 == 1]
                 if odd:
-                    editor.insert(tk.END, f"❌ Errore: Tasto {odd} era già premuto\n", "red")
+                    wrong_symbols = [symbols[i] for i in odd]
+                    editor.insert(tk.END, f"❌ Errore! Pulsanti non conformi: {', '.join(wrong_symbols)}\n\n", "red")
+                    error_reported = True
                     flag_exit = True
                     button_event.set()
                     return
-
+            # FINAL_TEST is FALSE: only nibble 7 and 17 must be odd
             else:
-                # FINAL_TEST == False: only two bytes must be odd
-                #   2nd byte from the right → index 8
-                #   7th byte from the right → index 3
-                required_odd_positions = [8, 3]
-
+                required_mask = [0] * N_BUTTONS
+                required_mask[7] = 1
+                required_mask[17] = 1
                 wrong = []
 
-                for idx, val in enumerate(payload_bytes):
-                    must_be_odd = (idx in required_odd_positions)
-                    is_odd = (val % 2 == 1)
-
-                    if must_be_odd and not is_odd:
-                        wrong.append(idx)
-                    if not must_be_odd and is_odd:
-                        wrong.append(idx)
+                for i, req in enumerate(required_mask):
+                    is_odd = (current_nibbles[i] % 2 == 1)
+                    if (req == 1 and not is_odd) or (req == 0 and is_odd):
+                        wrong.append(i)
 
                 if wrong:
-                    editor.insert(tk.END, f"❌ Errore: Tasto {wrong} era già premuto\n", "red")
+                    wrong_symbols = [symbols[i] for i in wrong]
+                    editor.insert(tk.END, f"❌ Errore! Pulsanti non conformi: {', '.join(wrong_symbols)}\n\n", "red")
+                    error_reported = True
                     flag_exit = True
                     button_event.set()
                     return
 
-            # Decode nibble counters and initialize baseline
-            current_nibbles = _extract_nibbles_from_payload(data, high_first=NIBBLE_ORDER_HIGH_FIRST)
+            # Setup baseline
             last_nibbles = current_nibbles.copy()
             count_buttons_memory = current_nibbles.copy()
             cum_counts = [0] * N_BUTTONS
             baseline_cum = [0] * N_BUTTONS
-
-            # Initial UI update (all buttons unpressed
-            try:
-                update_labels([0] * N_BUTTONS)
-            except:
-                pass
-            # End of first‑frame handling
+            update_labels([0] * N_BUTTONS)
             return
 
-        # FOLLOWING FRAMES → normal press‑detection logic
+        # Following frames (normal detection)
         if len(data) < FRAME_LEN:
-            print(f"Frame troppo corto ({len(data)}B): ignorato.")
             return
 
         current_nibbles = _extract_nibbles_from_payload(data, high_first=NIBBLE_ORDER_HIGH_FIRST)
 
-        # Safety recovery if baseline was never set
         if last_nibbles is None:
             last_nibbles = current_nibbles.copy()
             count_buttons_memory = current_nibbles.copy()
             return
 
-        # Accumulate modulo‑16 increments and detect presses (delta ≥ 2
         for i in range(N_BUTTONS):
-            # Handles wrap-around 0xF→0x
             inc = (current_nibbles[i] - last_nibbles[i]) & 0x0F
             cum_counts[i] += inc
-
             if (cum_counts[i] - baseline_cum[i]) >= 2:
                 button_pressed[i] = 1
 
         out_button_pressed = button_pressed.copy()
-        # Update stored nibble snapshot
         last_nibbles = current_nibbles.copy()
         count_buttons_memory = current_nibbles.copy()
+        update_labels(out_button_pressed)
 
-        # Update GUI labels
-        try:
-            update_labels(out_button_pressed)
-        except:
-            pass
-
-        # End test when all buttons have been pressed
         if all(out_button_pressed):
             flag_exit = True
             button_event.set()
 
         iteration += 1
 
-        # Debug
-        print(f"Nibbles: {current_nibbles}")
-        print(f"Cumulativi: {cum_counts}")
-        print(f"Stato pulsanti: {out_button_pressed}\n")
-
     except Exception as e:
-        try:
-            editor.insert(tk.END, f"❌ Errore in notification_handler(): {e}\n\n", "red")
-        except:
-            print(f"❌ Errore in notification_handler(): {e}")
+        editor.insert(tk.END, f"❌ Errore in notification_handler(): {e}\n\n", "red")
 
 
 def notification_eeprom(sender, data) -> None:
@@ -1108,7 +1079,7 @@ def restart() -> None:
                   Clears input fields, restores label layout, resets indicators, and reinitializes status values.
     """
     global editor, entry, user_input, start_button, labels, saved_label_row, status_ok, first_test, first_enter
-    global out_button_pressed, button_pressed, count_buttons_memory, iteration, first_data
+    global out_button_pressed, button_pressed, count_buttons_memory, iteration, first_data, error_reported
 
     try:
         # Reset editor
@@ -1147,6 +1118,7 @@ def restart() -> None:
         if first_test:
             first_test = False
 
+        error_reported = False
         first_enter = True
         first_data = 0
 
@@ -1477,7 +1449,7 @@ def create_new_windows(name: str) -> tk.Tk:
         if os.path.exists(icon_path):
             window.iconbitmap(icon_path)
         else:
-            raise FileNotFoundError(f"⚠️ Icon file not found: {icon_path}\n\n", "orange")
+            raise FileNotFoundError(f"⚠️ File Icon non trovato: {icon_path}\n\n", "orange")
 
         # Column expansion (SX: fixed, DX: expansion)
         window.grid_columnconfigure(0, weight=0)

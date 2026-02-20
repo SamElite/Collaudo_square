@@ -1,8 +1,8 @@
 title = "Elite testing device config file"
 
 [BOARD]
-producer = "ceis"
-batch = 44
+producer = "default"
+batch = 1
 
 [DEVICE]
 manufacturer = "default"
