@@ -700,41 +700,35 @@ def notification_handler(sender, data) -> None:
         if first_enter:
             first_enter = False
             first_data = bytes(data)
+            error_reported = False
             if len(data) < FRAME_LEN:
                 first_enter = True
                 return
 
             current_nibbles = _extract_nibbles_from_payload(data, high_first=NIBBLE_ORDER_HIGH_FIRST)
 
-            # FINAL_TEST is TRUE: aLL nibble must be even
-            if FINAL_TEST is True:
-                odd = [i for i, v in enumerate(current_nibbles) if v % 2 == 1]
-                if odd:
-                    wrong_symbols = [symbols[i] for i in odd]
-                    editor.insert(tk.END, f"❌ Errore! Pulsanti non conformi: {', '.join(wrong_symbols)}\n\n", "red")
-                    error_reported = True
-                    flag_exit = True
-                    button_event.set()
-                    return
-            # FINAL_TEST is FALSE: only nibble 7 and 17 must be odd
-            else:
-                required_mask = [0] * N_BUTTONS
+            required_mask = [0] * N_BUTTONS
+            wrong = []
+            if FINAL_TEST == "false":
                 required_mask[7] = 1
                 required_mask[17] = 1
-                wrong = []
 
-                for i, req in enumerate(required_mask):
-                    is_odd = (current_nibbles[i] % 2 == 1)
+            for i, req in enumerate(required_mask):
+                is_odd = (current_nibbles[i] % 2 == 1)
+                if FINAL_TEST == "true":
+                    if (req == 1 and not is_odd) or (req == 0 and is_odd):
+                        wrong.append(i)
+                else:
                     if (req == 1 and not is_odd) or (req == 0 and is_odd):
                         wrong.append(i)
 
-                if wrong:
-                    wrong_symbols = [symbols[i] for i in wrong]
-                    editor.insert(tk.END, f"❌ Errore! Pulsanti non conformi: {', '.join(wrong_symbols)}\n\n", "red")
-                    error_reported = True
-                    flag_exit = True
-                    button_event.set()
-                    return
+            if wrong:
+                wrong_symbols = [symbols[i] for i in wrong]
+                editor.insert(tk.END, f"❌ Errore! Pulsanti non conformi: {', '.join(wrong_symbols)}\n\n", "red")
+                error_reported = True
+                flag_exit = True
+                button_event.set()
+                return
 
             # Setup baseline
             last_nibbles = current_nibbles.copy()
